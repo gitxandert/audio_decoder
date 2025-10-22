@@ -10,6 +10,6 @@ src/main.rs:
 
 src/lib.rs:
 - mpeg
--- parses frame headers
+    - parses frame headers
 - wav
--- parses RIFF and fmt chunks
+    - parses RIFF and fmt chunks
