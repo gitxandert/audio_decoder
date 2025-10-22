@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Read, SeekFrom, prelude::*};
+use std::io::{self, Read};
 use std::ops::{Shl, BitOr, AddAssign};
 
 // helper to parse groups of num bytes
@@ -45,7 +45,12 @@ pub mod wav {
         }
     }
 
-    pub fn parse<I: Iterator<Item = io::Result<u8>>>(mut bytes: I) -> io::Result<()> {
+    pub fn parse(path: &str) -> io::Result<()> {
+        let mut f = File::open(path)?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        let mut _buf_iter = buf.iter();
+        /* TODO: fix this to parse similarly as in mod mpeg
         // "fmt "
         println!("\n");
         for _ in 1..=4 {
@@ -104,7 +109,7 @@ pub mod wav {
                 print!("\n");
             }
         }
-
+        */
         Ok(())
     }
 
