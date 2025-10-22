@@ -1,33 +1,33 @@
 use std::fs::File;
-use std::io::{self, Read, BufReader};
+use std::io::{self, Read, SeekFrom, prelude::*};
+use std::fmt::UpperHex;
 
 use audio_decoder::{parse_bytes, wav};
 
-// WAV file parser
 fn main() -> io::Result<()> {
-    let f = BufReader::new(File::open("assets/winterly.aif")?);
-    let mut bytes = f.bytes();
+    let mut f = File::open("assets/lazy_beat.mp3")?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf)?;
+    let mut buf_iter = buf.iter().copied().peekable();
 
-    // RIFF
-    for _ in 1..=4 {
-        if let Some(Ok(b)) = bytes.next() {
-            print!("{}", char::from(b));
+    while let Some(b) = buf_iter.next() {
+        if b == 0xFF {
+            if let Some(&next) = buf_iter.peek() {
+                if next & 0xE0 == 0xE0 {
+                    parse_header(&mut buf_iter);
+                }
+            }
         }
     }
-    println!("");
-
-    let chunk_size: u32 = parse_bytes(&mut bytes, 4)?;
-    println!("Chunk size: {}", chunk_size);
-
-    // WAVE
-    for _ in 1..=4 {
-        if let Some(Ok(b)) = bytes.next() {
-            print!("{}", char::from(b));
-        }
-    }
-    println!("");
-    
-    // wav::parse(bytes);
 
     Ok(())
+}
+
+fn parse_header<I>(it: &mut I)
+where I: Iterator<Item = u8>, {
+    println!("Parsing header:");
+    for _ in 0..3 {
+        println!("{:#X}", it.next().unwrap());
+    }
+    println!("");
 }
