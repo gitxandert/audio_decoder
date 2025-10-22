@@ -70,11 +70,13 @@ fn main() -> io::Result<()> {
             let dw_channel_mask: u32 = parse_bytes(&mut bytes, 4)?;
             println!("Speaker position mask: {dw_channel_mask}");
      
-            print!("GUID: ");
-            for _ in 0..16 {
-                if let Some(Ok(b)) = bytes.next() {
-                    print!("{}", char::from(b));
-                }
+            let old_fmt: u32 = parse_bytes(&mut bytes, 2)?;
+            println!("GUID: {old_fmt}");
+
+            // skip over Microsoft stuff
+            // TODO: compare against audio media subtype
+            for _ in 0..14 {
+                if let Some(Ok(b)) = bytes.next() {}
             }
             print!("\n"); 
         }
