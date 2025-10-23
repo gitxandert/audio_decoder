@@ -1,9 +1,9 @@
 use std::io;
 
-use audio_decoder::{wav, mpeg};
+use audio_decoder::{mpeg, aiff, wav};
 
 fn main() -> Result<(), ParseError<'static>> {
-    let path = "assets/lazy_beat.mp3";
+    let path = "assets/winterly.aif";
     let ext: &str = match path.rsplit_once(|b: char| b == '.') {
         Some((before, after)) if !before.is_empty() && !after.is_empty() => after,
         _ => "",
@@ -12,6 +12,7 @@ fn main() -> Result<(), ParseError<'static>> {
     match ext {
         "mp3" => mpeg::parse(path),
         "wav" => wav::parse(path),
+        "aif" => aiff::parse(path),
         _ => return Err(ParseError::UnsupportedFormat(ext)),
     }?;
 
