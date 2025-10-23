@@ -11,5 +11,7 @@ src/main.rs:
 src/lib.rs:
 - mpeg
     - parses frame headers
+- aiff
+    - parses FORM, COMM, and SSND chunks
 - wav
     - parses RIFF and fmt chunks
