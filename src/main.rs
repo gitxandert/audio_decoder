@@ -3,7 +3,7 @@ use std::io;
 use audio_decoder::{mpeg, aiff, wav};
 
 fn main() -> Result<(), ParseError<'static>> {
-    let path = "assets/winterly.aif";
+    let path = "assets/lazy_beat.mp3";
     let ext: &str = match path.rsplit_once(|b: char| b == '.') {
         Some((before, after)) if !before.is_empty() && !after.is_empty() => after,
         _ => "",
