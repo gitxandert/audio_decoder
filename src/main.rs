@@ -21,7 +21,7 @@ fn main() -> Result<(), ParseError<'static>> {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-enum ParseError<'a> {
+pub enum ParseError<'a> {
     UnsupportedFormat(&'a str),
     Io(io::Error),
 }

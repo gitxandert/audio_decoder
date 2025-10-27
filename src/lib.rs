@@ -25,7 +25,7 @@ pub mod mpeg {
             if b == 0xFF {
                 if let Some(&next) = buf_iter.peek() {
                     if next & 0xE0 == 0xE0 {
-                        parse_header(&mut buf_iter);
+                        parse_header(&mut buf_iter)?;
                     }
                 }
             }
@@ -34,7 +34,8 @@ pub mod mpeg {
         Ok(())
     }
 
-    static BITRATES: [[u32; 5]; 14] = [
+    static BITRATES: [[u32; 5]; 16] = [
+        [0,   0,    0,    0,    0], // dummy
         [32,	32,	  32,	  32,	  8],
         [64,	48,	  40,	  48,	  16],
         [96,	56,	  48,	  56,	  24],
@@ -49,6 +50,7 @@ pub mod mpeg {
         [384,	256,	224,	192,	128],
         [416,	320,	256,	224,	144],
         [448,	384,	320,	256,	160],
+        [0,   0,    0,    0,    0], // dummy
     ];
 
     fn match_bitrate(row: u8, V: &u8, L: &u8) -> u32 {
@@ -61,7 +63,7 @@ pub mod mpeg {
             _   => 4,
         };
 
-        BITRATES[row][col]
+        BITRATES[row as usize][col]
     }
 
     fn match_sr(bits: &u8, v_id: &u8) -> f64 {
@@ -78,28 +80,44 @@ pub mod mpeg {
             0x1 => base * 1.5,
             0x2 => base,
             _   => 0f64,
-        }
+        };
 
         sr
     }
- 
-    fn parse_header<I>(it: &mut I)
+
+    static mut header_count: u32 = 1;
+
+    fn parse_header<I>(it: &mut I) -> io::Result<()>
     where I: Iterator<Item = u8> {
-        println!("Parsing header:");
-        // the following is parsed by bits:
+        let unex_eof = io::Error::new(io::ErrorKind::UnexpectedEof, "EOF");
+        unsafe {
+            let count: *const u32 = &raw const header_count;
+            println!("Parsing header {}", *count);
+        }
+        
+        let Some(AAAB_BCCD) = it.next() else { return Err(unex_eof) };
         // AAA
         // (23-21) = guaranteed set at this point
         //
         // B B
         // (20,19) = audio version ID
         // bit 20 will only ever *not* be set for MPEG v2.5
-        let Some(AAAB) = it.next();
-        let v_id: u8 = (AAAB & 0x1) << 1;
+        let AAAB = AAAB_BCCD >> 4;
+        let mut v_id: u8 = (AAAB & 0x1) << 1;
         //
         // bit 19 is 0 for MPEG V2 or 1 for MPEG V1
         //
-        let Some(BCCD) = it.next();
+        let BCCD = AAAB_BCCD & 0x0F;
         v_id |= BCCD & 0x1;
+
+        print!("MPEG Version ");
+        match v_id {
+            0x0 => print!("2.5\n"),
+            0x1 => return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported audio version")),
+            0x2 => print!("2\n"),
+            0x3 => print!("1\n"),
+            _   => return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the version id correctly?")),
+        };
 
         // CC
         // (18,17) = layer description
@@ -107,47 +125,86 @@ pub mod mpeg {
         // 10 - Layer II
         // 11 - Layer I
         let layer: u8 = (BCCD >> 1) & 0x3;
+        
+        print!("Layer ");
+        match layer {
+            0x0 => {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "Cannot parse reserved layer"))
+            },
+            0x1 => print!("III\n"),
+            0x2 => print!("II\n"),
+            0x3 => print!("I\n"),
+            _   => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the version id correctly?"))
+            },
+        };
 
         // D
         // (16) = protection bit
         // if 0, check for 16bit CRC after header
-        let not_protected: bool = BCCD & 0x1;
+        let not_protected: u8 = BCCD & 0x1;
+        if not_protected == 1{
+            println!("Not protected");
+        } else {
+            println!("Protected");
+        }
         
+        let Some(EEEE_FFGH) = it.next() else { return Err(unex_eof) };
         // EEEE
         // (15,12) = bitrate index
         // this depends on combinations of version (V) and layer (L)
         // apply V2 to V2.5
         // 0000 and 1111 are not allowed
-        let Some(EEEE) = it.next();
+        let EEEE = EEEE_FFGH >> 4;
         if EEEE == 0 || EEEE == 0xF {
-            return io::Error::new(io::ErrorKind::Unsupported, "This application does not support 'free' or 'bad' bitrates");
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "This application does not support 'free' or 'bad' bitrates"));
         }
         let bitrate: u32 = match_bitrate(EEEE, &v_id, &layer);
+        println!("Bitrate: {bitrate}");
 
         // FF
         // (11,10) = sampling rate
         // varies by V
-        let Some(FFGH) = it.next();
+        let FFGH = EEEE_FFGH & 0x0F;
         let sr: f64 = match_sr(&FFGH, &v_id);
-        
+        println!("Sample rate: {sr}");
+
         // G
         // (9) = padding bit
-        let padded: bool = (FFGH >> 1) & 0x1;
+        let padded: u8 = (FFGH >> 1) & 0x1;
+        if padded == 1 {
+            println!("Padded");
+        } else {
+            println!("Not padded");
+        }
 
         // H
         // (8) = private bit
         // ignore
-        // 
+        //
+        let Some(IIJJ_KLMM) = it.next() else { return Err(unex_eof) };
         // I
         // (7,6) = channel mode
-        let Some(IIJJ) = it.next();
+        let IIJJ = IIJJ_KLMM >> 4;
         let channel_mode = IIJJ >> 2;
-        
+        match channel_mode {
+            0x0 => println!("Stereo"),
+            0x1 => println!("Joint stereo"),
+            0x2 => println!("Dual channel (stereo)"),
+            0x3 => println!("Single channel (mono)"),
+            _   => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the channel mode correctly?"))
+            },
+        };
         // J
         // (5,4) = mode extension (only if channel_mode = joint stereo)
-        let mode_ext = IIJJ & 0xC;
+        // let mode_ext = IIJJ & 0x3;
 
         // bits 3-0 are not pertinent
+        
+        unsafe { header_count += 1; }
+        println!("");
+        Ok(())
     }
 }// end pub mod mpeg
 
@@ -344,9 +401,9 @@ pub mod wav {
 
         let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut buf_iter, 2, le)?)
         else {
-            eprintln!("Error parsing format tag");
-            return Ok(())
+            return Err(io::Error::new(io::ErrorKind::Unsupported,"Unrecognized format"));
         };
+        
         println!("Format code: {fmt_tag:?}");
 
         let n_chan: u32 = parse_bytes(&mut buf_iter, 2, le)?;
