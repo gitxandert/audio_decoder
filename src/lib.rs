@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
 
 // helper to buffer files
@@ -15,23 +15,111 @@ fn buf_file(path: &str) -> io::Result<Vec<u8>> {
 pub mod mpeg {
     use super::*;
 
-    // literally just look for headers,
-    // then suck out the data
-    pub fn parse(path: &str) -> io::Result<()> {
+    // iterate through frames by frame size
+    pub fn parse(path: &str) -> io::Result<Vec<u8>> {
         let buf = buf_file(path)?;
-        let mut buf_iter = buf.iter().copied().peekable();
-
-        while let Some(b) = buf_iter.next() {
-            if b == 0xFF {
-                if let Some(&next) = buf_iter.peek() {
-                    if next & 0xE0 == 0xE0 {
-                        parse_header(&mut buf_iter)?;
+        let mut reader = buf.iter().copied().peekable();
+        let mut data: Vec<u8> = Vec::new();
+        loop {
+            if let Some(b) = reader.next() {
+                if b == 0xFF {
+                    if let Some(&next) = reader.peek() {
+                        if next & 0xE0 == 0xE0 {
+                            let header = parse_header(&mut reader)?;
+                            let frame_len = compute_frame_len(header)?;
+                            for _ in 0..frame_len {
+                                if let Some(b) = reader.next() {
+                                    data.push(b);
+                                } else {
+                                    break;
+                                }
+                            }
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        break;
                     }
+                } else {
+                    continue;
                 }
+            } else {
+                break;
+            }
+        }
+    
+        Ok(data)
+    }
+
+    #[derive(Debug)]
+    struct Header {
+       version: f32,
+       layer: i32,
+       protected: bool,
+       bitrate: u32,
+       sr: f64,
+       padded: bool,
+       channel_mode: u8,
+    }
+
+    impl Header {
+        fn format(version: u8, layer: u8, not_protected: u8, bitrate: u32, sr: f64, padded: u8, channel_mode: u8) -> Self {
+            let version: f32 = match version {
+                0x0 => 2.5f32,
+                0x2 => 2.0f32,
+                0x3 => 1.0f32,
+                _   => 0.0f32, // check if greater than 0
+            };
+
+            let layer: i32 = match layer {
+                0x1 => 3,
+                0x2 => 2,
+                0x3 => 1,
+                _   => 0, // check if greater than 0
+            };
+
+            let protected: bool = match not_protected {
+                0 => true,
+                _ => false,
+            };
+
+            let padded: bool = match padded {
+                1 => true,
+                _ => false,
+            };
+
+            Self {
+                version,
+                layer,
+                protected,
+                bitrate,
+                sr,
+                padded,
+                channel_mode
             }
         }
 
-        Ok(())
+        fn barf(&self) -> (f32, i32, bool, u32, f64, bool, u8) {
+                (self.version, self.layer, self.protected, self.bitrate, self.sr, self.padded, self.channel_mode)
+        }
+    }
+
+    // returns frame size in bytes
+    fn compute_frame_len(header: Header) -> io::Result<u32> {
+        let (_, layer, _, br, sr, _, _) = header.barf();
+        
+        let br: f64 = br as f64 * 1000f64;
+        let frame_len: f64 = match layer {
+            3 => 144f64 * br as f64 / sr,
+            2 => 144f64 * br as f64 / sr,
+            1 => (12f64 * br as f64 / sr) * 4f64,
+            _ => {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "Cannot parse reserved layer"))
+            }
+        };
+
+        // subtract the header
+        Ok(frame_len as u32 - 4)
     }
 
     static BITRATES: [[u32; 5]; 16] = [
@@ -76,8 +164,8 @@ pub mod mpeg {
 
         let FF = bits >> 2;
         let sr: f64 = match FF {
-            0x0 => base * 1.378125,
-            0x1 => base * 1.5,
+            0x0 => base * 1.378125f64,
+            0x1 => base * 1.5f64,
             0x2 => base,
             _   => 0f64,
         };
@@ -87,7 +175,7 @@ pub mod mpeg {
 
     static mut header_count: u32 = 1;
 
-    fn parse_header<I>(it: &mut I) -> io::Result<()>
+    fn parse_header<I>(it: &mut I) -> io::Result<Header>
     where I: Iterator<Item = u8> {
         let unex_eof = io::Error::new(io::ErrorKind::UnexpectedEof, "EOF");
         unsafe {
@@ -103,20 +191,24 @@ pub mod mpeg {
         // (20,19) = audio version ID
         // bit 20 will only ever *not* be set for MPEG v2.5
         let AAAB = AAAB_BCCD >> 4;
-        let mut v_id: u8 = (AAAB & 0x1) << 1;
+        let mut version: u8 = (AAAB & 0x1) << 1;
         //
         // bit 19 is 0 for MPEG V2 or 1 for MPEG V1
         //
         let BCCD = AAAB_BCCD & 0x0F;
-        v_id |= BCCD & 0x1;
+        version |= BCCD & 0x1;
 
         print!("MPEG Version ");
-        match v_id {
+        match version {
             0x0 => print!("2.5\n"),
-            0x1 => return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported audio version")),
+            0x1 => {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported audio version"))
+            },
             0x2 => print!("2\n"),
             0x3 => print!("1\n"),
-            _   => return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the version id correctly?")),
+            _   => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the version id correctly?"))
+            },
         };
 
         // CC
@@ -156,17 +248,19 @@ pub mod mpeg {
         // apply V2 to V2.5
         // 0000 and 1111 are not allowed
         let EEEE = EEEE_FFGH >> 4;
+        let mut bitrate: u32;
         if EEEE == 0 || EEEE == 0xF {
             return Err(io::Error::new(io::ErrorKind::Unsupported, "This application does not support 'free' or 'bad' bitrates"));
+        } else {
+            bitrate = match_bitrate(EEEE, &version, &layer);
+            println!("Bitrate: {bitrate}");
         }
-        let bitrate: u32 = match_bitrate(EEEE, &v_id, &layer);
-        println!("Bitrate: {bitrate}");
 
         // FF
         // (11,10) = sampling rate
         // varies by V
         let FFGH = EEEE_FFGH & 0x0F;
-        let sr: f64 = match_sr(&FFGH, &v_id);
+        let sr: f64 = match_sr(&FFGH, &version);
         println!("Sample rate: {sr}");
 
         // G
@@ -204,7 +298,15 @@ pub mod mpeg {
         
         unsafe { header_count += 1; }
         println!("");
-        Ok(())
+        Ok(Header::format(
+            version,
+            layer,
+            not_protected,
+            bitrate,
+            sr,
+            padded,
+            channel_mode,
+        ))
     }
 }// end pub mod mpeg
 
@@ -284,47 +386,47 @@ pub mod aiff {
     // only care about COMM and SSND chunks,
     // so adjust this to search only for those and
     // extract the relevant information
-    pub fn parse(path: &str) -> io::Result<()> {
+    pub fn parse(path: &str) -> io::Result<Vec<u8>> {
         let buf = buf_file(path)?;
-        let mut buf_iter = buf.iter().copied();
+        let mut reader = buf.iter().copied();
 
         // FORM
-        print_id(&mut buf_iter, 4);
+        print_id(&mut reader, 4);
 
         // parse chunks as big-endian
         let be: bool = false;
 
-        let form_size: u32 = parse_bytes(&mut buf_iter, 4, be)?;
+        let form_size: u32 = parse_bytes(&mut reader, 4, be)?;
         println!("Form size: {form_size}");
 
         // AIFF
-        print_id(&mut buf_iter, 4);
+        print_id(&mut reader, 4);
         
         println!("");
 
         // COMM
-        print_id(&mut buf_iter, 4);
+        print_id(&mut reader, 4);
 
-        let comm_size: u32 = parse_bytes(&mut buf_iter, 4, be)?;
+        let comm_size: u32 = parse_bytes(&mut reader, 4, be)?;
         if comm_size == 18 {
             println!("Comm size: {comm_size}");
         } else {
             eprintln!("Comm size not 18; que?");
         }
 
-        let num_channels: u32 = parse_bytes(&mut buf_iter, 2, be)?;
+        let num_channels: u32 = parse_bytes(&mut reader, 2, be)?;
         println!("Num channels: {num_channels}");
 
-        let num_frames: u32 = parse_bytes(&mut buf_iter, 4, be)?;
+        let num_frames: u32 = parse_bytes(&mut reader, 4, be)?;
         println!("Num sample frames: {num_frames}");
 
-        let sample_size: u32 = parse_bytes(&mut buf_iter, 2, be)?;
+        let sample_size: u32 = parse_bytes(&mut reader, 2, be)?;
         println!("Sample size: {sample_size}");
 
         // 80 bit floating-point sample rate
         let mut rate_bytes = [0u8; 10];
         for i in 0..10 {
-            rate_bytes[i] = buf_iter.next().unwrap();
+            rate_bytes[i] = reader.next().unwrap();
         }
         let sample_rate: f64 = parse_ieee_extended(rate_bytes);
         println!("Sample rate: {sample_rate}");
@@ -332,19 +434,19 @@ pub mod aiff {
         println!("");
 
         // SSND
-        print_id(&mut buf_iter, 4);
+        print_id(&mut reader, 4);
 
-        let ssnd_size: u32 = parse_bytes(&mut buf_iter, 4, be)?;
+        let ssnd_size: u32 = parse_bytes(&mut reader, 4, be)?;
         println!("Data size: {ssnd_size}");
 
         // typically 0
-        let offset: u32 = parse_bytes(&mut buf_iter, 4, be)?;
+        let offset: u32 = parse_bytes(&mut reader, 4, be)?;
         println!("Offset: {offset}");
         // also typically 0
-        let block_size: u32 = parse_bytes(&mut buf_iter, 4, be)?;
+        let block_size: u32 = parse_bytes(&mut reader, 4, be)?;
         println!("Block size: {block_size}");
 
-        Ok(())
+        Ok(Vec::<u8>::new())
     }
 } // end pub mod aiff
 
@@ -375,77 +477,77 @@ pub mod wav {
         }
     }
 
-    pub fn parse(path: &str) -> io::Result<()> {
+    pub fn parse(path: &str) -> io::Result<Vec<u8>> {
         let buf = buf_file(path)?;
-        let mut buf_iter = buf.iter().copied();
+        let mut reader = buf.iter().copied();
  
         // read byes little-endian
         let le: bool = true;     
 
         // RIFF
-        print_id(&mut buf_iter, 4);
+        print_id(&mut reader, 4);
 
-        let riff_size: u32 = parse_bytes(&mut buf_iter, 4, le)?;
+        let riff_size: u32 = parse_bytes(&mut reader, 4, le)?;
         println!("Chunk size: {riff_size}");
 
         // WAVE
-        print_id(&mut buf_iter, 4);
+        print_id(&mut reader, 4);
 
         println!("");
 
         // "fmt "
-        print_id(&mut buf_iter, 4);        
+        print_id(&mut reader, 4);        
 
-        let fmt_size: u32 = parse_bytes(&mut buf_iter, 4, le)?;
+        let fmt_size: u32 = parse_bytes(&mut reader, 4, le)?;
         println!("Chunk size: {}", fmt_size);
 
-        let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut buf_iter, 2, le)?)
+        let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, 2, le)?)
         else {
             return Err(io::Error::new(io::ErrorKind::Unsupported,"Unrecognized format"));
         };
         
         println!("Format code: {fmt_tag:?}");
 
-        let n_chan: u32 = parse_bytes(&mut buf_iter, 2, le)?;
+        let n_chan: u32 = parse_bytes(&mut reader, 2, le)?;
         println!("Num channels: {n_chan}");
 
-        let sample_rate: u32 = parse_bytes(&mut buf_iter, 4, le)?;
+        let sample_rate: u32 = parse_bytes(&mut reader, 4, le)?;
         println!("Sample rate: {sample_rate}");
 
-        let data_rate: u32 = parse_bytes(&mut buf_iter, 4, le)?;
+        let data_rate: u32 = parse_bytes(&mut reader, 4, le)?;
         println!("Ave bytes /sec: {data_rate}");
 
-        let data_blk_sz: u32 = parse_bytes(&mut buf_iter, 2, le)?;
+        let data_blk_sz: u32 = parse_bytes(&mut reader, 2, le)?;
         println!("Block size: {data_blk_sz}");
 
-        let bits_per: u32 = parse_bytes(&mut buf_iter, 2, le)?;
+        let bits_per: u32 = parse_bytes(&mut reader, 2, le)?;
         println!("Bits per sample: {bits_per}");
 
         // if !WaveFormatPcm (i.e. is extensible)
         if fmt_size >= 18 {
             // extension is either 0 or 22
-            let cb_size: u32 = parse_bytes(&mut buf_iter, 2, le)?;
+            let cb_size: u32 = parse_bytes(&mut reader, 2, le)?;
             println!("Extension size: {cb_size}");
 
             if cb_size > 0 {
-                let valid_bits: u32 = parse_bytes(&mut buf_iter, 2, le)?;
+                let valid_bits: u32 = parse_bytes(&mut reader, 2, le)?;
                 println!("Valid bits per sample: {valid_bits}");
 
-                let dw_channel_mask: u32 = parse_bytes(&mut buf_iter, 4, le)?;
+                let dw_channel_mask: u32 = parse_bytes(&mut reader, 4, le)?;
                 println!("Speaker position mask: {dw_channel_mask}");
 
-                let old_fmt: u32 = parse_bytes(&mut buf_iter, 2, le)?;
+                let old_fmt: u32 = parse_bytes(&mut reader, 2, le)?;
                 println!("GUID: {old_fmt}");
 
                 // skip over Microsoft stuff
                 // TODO: compare against audio media subtype
                 for _ in 0..14 {
-                    if let Some(b) = buf_iter.next() {}
+                    if let Some(b) = reader.next() {}
                 }
                 print!("\n");
             }
         }
-        
-        Ok(())
+       
+        Ok(Vec::<u8>::new())
     }
 } // end pub mod wav
