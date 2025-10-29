@@ -25,6 +25,7 @@ pub mod mpeg {
             if b == 0xFF {
                 if let Some(&next) = buf_iter.peek() {
                     if next & 0xE0 == 0xE0 {
+                        println!("{:#X} {:#X}", &b, &next);
                         parse_header(&mut buf_iter)?;
                     }
                 }
@@ -150,6 +151,7 @@ pub mod mpeg {
         }
         
         let Some(EEEE_FFGH) = it.next() else { return Err(unex_eof) };
+        println!("{:#X}", &EEEE_FFGH);
         // EEEE
         // (15,12) = bitrate index
         // this depends on combinations of version (V) and layer (L)
@@ -183,6 +185,7 @@ pub mod mpeg {
         // ignore
         //
         let Some(IIJJ_KLMM) = it.next() else { return Err(unex_eof) };
+        println!("{:#X}", &IIJJ_KLMM);
         // I
         // (7,6) = channel mode
         let IIJJ = IIJJ_KLMM >> 4;
