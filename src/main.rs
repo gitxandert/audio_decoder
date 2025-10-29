@@ -1,6 +1,6 @@
 use std::io;
 
-use audio_decoder::{mpeg, aiff, wav};
+use audio_decoder::{mpeg::mpeg, aiff::aiff, wav::wav};
 
 fn main() -> Result<(), ParseError<'static>> {
     let path = "assets/lazy_beat.mp3";

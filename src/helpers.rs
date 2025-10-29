@@ -5,6 +5,7 @@ use std::ops::{Shl, BitOr, AddAssign};
 // helpers for AIFF and WAV
 //
 // parse groups of num bytes
+//
 pub fn parse_bytes<I, T>(bytes: &mut I, num: usize, le: bool) -> io::Result<T>
 where
     I: Iterator<Item = u8>,
@@ -72,6 +73,3 @@ where I: Iterator<Item = u8> {
     println!("");
 }
 
-pub mod mpeg;
-pub mod aiff;
-pub mod wav;
