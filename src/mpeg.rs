@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{self, Read, SeekFrom};
+use std::collections::HashMap;
 
 pub mod mpeg {
     use super::*;
@@ -10,55 +11,68 @@ pub mod mpeg {
         let mut reader = Vec::new();
         f.read_to_end(&mut reader)?;
 
+        let file_len = reader.len();
         let mut cur: usize = 0;
+        let mut possibles: HashMap<usize, Vec<usize>> = HashMap::new();
 
-        let mut data: Vec<u8> = Vec::new();
-        loop {
-            println!("looping\t|\tcur = {}\t|\tval = {:#X}", cur, reader[cur]);
+        while cur < file_len {
             if let b = reader[cur] {
                 if b == 0xFF {
-                    cur += 1;
-                    if let next = reader[cur] {
-                        if next & 0xE0 == 0xE0 {
-                            let header = parse_header(&mut reader,&mut cur)?;
-                            let frame_len = compute_frame_len(header)?;
-                            println!("Pushing {frame_len} frames to data\n");
-                            for _ in 0..frame_len {
-                                cur += 1;
-                                if let b = reader[cur] {
-                                    println!("pushing {:#X} at {}", reader[cur], cur);
-                                    data.push(b);
-                                } else {
-                                    println!("breaking bc at next frame");
-                                    break;
-                                }
-                            }
-                            cur += 1;
-                        } else {
-                            println!("pushing {:#X} at {}", reader[cur-1], cur-1);
-                            data.push(reader[cur - 1]);
-                            println!("pushing {:#X} at {}", reader[cur], cur);
-                            data.push(reader[cur]);
-                            cur += 1;
+                    if reader[cur + 1] & 0xE0 == 0xE0 {
+                        let fp = cur;
+                        let mut supb: usize = 0;
+                        supb = ((reader[cur] as usize) << 24);
+                        cur += 1;
+                        if cur >= file_len {
+                            break;
                         }
+                        supb |= ((reader[cur] as usize) << 16);
+                        cur += 1;
+                        if cur >= file_len {
+                            break;
+                        }
+                        supb |= ((reader[cur] as usize) << 8);
+                        cur += 1;
+                        if cur >= file_len {
+                            break;
+                        }
+                        supb |= reader[cur] as usize;
+                        possibles.entry(supb).or_insert(vec![fp]).push(fp);
+                        cur += 1;
                     } else {
-                        break;
+                        cur += 1;
                     }
                 } else {
-                    println!("pushing {} at {}", reader[cur], cur);
-                    data.push(b);
                     cur += 1;
                 }
             } else {
                 break;
             }
         }
-    
-        Ok(data)
+        
+        let mut vecs: Vec<(&usize, &Vec<usize>)> = possibles.iter().collect();
+        vecs.sort_by(|a, b| {
+            let al = a.1.len();
+            let bl = b.1.len();
+            bl.cmp(&al)
+        });
+        for i in 0..5 {
+            println!("Value: {:#X}\tInstances: {}", vecs[i].0, vecs[i].1.len());
+            match parse_header(vecs[i].0) {
+                Ok((v, l, p, br, sr, pd, cm)) => {
+                    let header = Header::format(vecs[i].1[0], v, l, p, br, sr, pd, cm);
+                    println!("{:?}", header);
+                },
+                Err(error) => eprintln!("{error}"),
+            };
+            println!("");
+        }
+        Ok(Vec::<u8>::new())
     }
 
     #[derive(Debug)]
     struct Header {
+       file_pos: usize,
        version: f32,
        layer: i32,
        protected: bool,
@@ -69,7 +83,7 @@ pub mod mpeg {
     }
 
     impl Header {
-        fn format(version: u8, layer: u8, not_protected: u8, bitrate: u32, sr: f64, padded: u8, channel_mode: u8) -> Self {
+        fn format(file_pos: usize, version: u8, layer: u8, not_protected: u8, bitrate: u32, sr: f64, padded: u8, channel_mode: u8) -> Self {
             let version: f32 = match version {
                 0x0 => 2.5f32,
                 0x2 => 2.0f32,
@@ -95,6 +109,7 @@ pub mod mpeg {
             };
 
             Self {
+                file_pos,
                 version,
                 layer,
                 protected,
@@ -184,17 +199,72 @@ pub mod mpeg {
         sr
     }
 
-    static mut header_count: u32 = 1;
+    fn skiparound(reader: &mut Vec<u8>, cur: &mut usize) {
+        loop {
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).expect("Failure");
+            let input = input.trim();
+            let isok = input.parse::<i32>().is_ok();
+            if isok {
+                let sign = input.chars().nth(0).unwrap();
+                if sign == '-' {
+                    let parsed = &input[1..].parse::<usize>().unwrap();
+                    *cur -= parsed;
+                } else {
+                    *cur += input.parse::<usize>().unwrap();
+                }
+                println!("Val at {}: {:#X}", cur, reader[*cur]);
+            }
+            else {
+                if input == "q" {
+                    break;
+                } else if input == "n" {
+                    *cur += 1;
+                } else if input == "b" {
+                    *cur -= 1;
+                } else if input == "f-" {
+                    *cur -= 1;
+                    let mut count = 1;
+                    loop {
+                        while reader[*cur] != 0xFF {
+                            *cur -= 1;
+                            count += 1;
+                        }
+                        if reader[*cur + 1] & 0xE0 == 0xE0 {
+                            break;
+                        } else {
+                            *cur -= 1;
+                            count += 1;
+                        }
+                    }
+                    println!("Skipped backward {count} times");
+                } else if input == "f" {
+                    *cur += 1;
+                    let mut count = 1;
+                    loop {
+                        while reader[*cur] != 0xFF {
+                            *cur += 1;
+                            count += 1;
+                        }
+                        if reader[*cur + 1] & 0xE0 == 0xE0 {
+                            break;
+                        } else {
+                            *cur += 1;
+                            count += 1;
+                        }
+                    }                   
+                    println!("Skipped ahead {count} times");
+                }
+                println!("Val at {}: {:#X}", cur, reader[*cur]);
+            }
+        }
+    }
 
     // cur is set at the fourth byte in the header
-    fn parse_header(reader: &mut Vec<u8>, cur: &mut usize) -> io::Result<Header> {
+    fn parse_header(bytes: &usize) -> io::Result<(u8, u8, u8, u32, f64, u8, u8)> {
         let unex_eof = io::Error::new(io::ErrorKind::UnexpectedEof, "EOF");
-        unsafe {
-            let count: *const u32 = &raw const header_count;
-            println!("Parsing header {}", *count);
-        }
         
-        let AAAB_BCCD = reader[*cur] else { return Err(unex_eof) };
+        let AAAB_BCCD = (bytes >> 24) as u8 else { return Err(unex_eof) };
         // AAA
         // (23-21) = guaranteed set at this point
         //
@@ -252,8 +322,7 @@ pub mod mpeg {
             println!("Protected");
         }
         
-        *cur += 1;
-        let EEEE_FFGH = reader[*cur] else { return Err(unex_eof) };
+        let EEEE_FFGH = (bytes >> 16) as u8 else { return Err(unex_eof) };
         // EEEE
         // (15,12) = bitrate index
         // this depends on combinations of version (V) and layer (L)
@@ -288,8 +357,7 @@ pub mod mpeg {
         // (8) = private bit
         // ignore
         //
-        *cur += 1;
-        let IIJJ_KLMM = reader[*cur] else { return Err(unex_eof) };
+        let IIJJ_KLMM = (bytes >> 8) as u8 else { return Err(unex_eof) };
         // I
         // (7,6) = channel mode
         let IIJJ = IIJJ_KLMM >> 4;
@@ -309,9 +377,8 @@ pub mod mpeg {
 
         // bits 3-0 are not pertinent
         
-        unsafe { header_count += 1; }
         println!("");
-        Ok(Header::format(
+        Ok((
             version,
             layer,
             not_protected,
