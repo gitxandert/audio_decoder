@@ -61,11 +61,12 @@ pub mod mpeg {
             match parse_header(vecs[i].0) {
                 Ok((v, l, p, br, sr, pd, cm)) => {
                     let header = Header::format(vecs[i].1[0], v, l, p, br, sr, pd, cm);
-                    println!("{:?}", header);
                 },
-                Err(error) => eprintln!("{error}"),
+                Err(error) => {
+                    eprintln!("ERROR: {error}");
+                    println!("");
+                }
             };
-            println!("");
         }
         Ok(Vec::<u8>::new())
     }
@@ -264,7 +265,7 @@ pub mod mpeg {
     fn parse_header(bytes: &usize) -> io::Result<(u8, u8, u8, u32, f64, u8, u8)> {
         let unex_eof = io::Error::new(io::ErrorKind::UnexpectedEof, "EOF");
         
-        let AAAB_BCCD = (bytes >> 24) as u8 else { return Err(unex_eof) };
+        let AAAB_BCCD = (bytes >> 16) as u8 else { return Err(unex_eof) };
         // AAA
         // (23-21) = guaranteed set at this point
         //
@@ -322,7 +323,7 @@ pub mod mpeg {
             println!("Protected");
         }
         
-        let EEEE_FFGH = (bytes >> 16) as u8 else { return Err(unex_eof) };
+        let EEEE_FFGH = (bytes >> 8) as u8 else { return Err(unex_eof) };
         // EEEE
         // (15,12) = bitrate index
         // this depends on combinations of version (V) and layer (L)
@@ -357,7 +358,7 @@ pub mod mpeg {
         // (8) = private bit
         // ignore
         //
-        let IIJJ_KLMM = (bytes >> 8) as u8 else { return Err(unex_eof) };
+        let IIJJ_KLMM = *bytes as u8 else { return Err(unex_eof) };
         // I
         // (7,6) = channel mode
         let IIJJ = IIJJ_KLMM >> 4;
