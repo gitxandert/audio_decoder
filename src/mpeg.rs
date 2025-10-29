@@ -7,34 +7,47 @@ pub mod mpeg {
     // iterate through frames by frame size
     pub fn parse(path: &str) -> io::Result<Vec<u8>> {
         let mut f = File::open(path)?;
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf)?;
+        let mut reader = Vec::new();
+        f.read_to_end(&mut reader)?;
 
-        let mut reader = buf.iter().copied().peekable();
+        let mut cur: usize = 0;
+
         let mut data: Vec<u8> = Vec::new();
         loop {
-            if let Some(b) = reader.next() {
+            println!("looping\t|\tcur = {}\t|\tval = {:#X}", cur, reader[cur]);
+            if let b = reader[cur] {
                 if b == 0xFF {
-                    if let Some(&next) = reader.peek() {
+                    cur += 1;
+                    if let next = reader[cur] {
                         if next & 0xE0 == 0xE0 {
-                            let header = parse_header(&mut reader)?;
+                            let header = parse_header(&mut reader,&mut cur)?;
                             let frame_len = compute_frame_len(header)?;
                             println!("Pushing {frame_len} frames to data\n");
                             for _ in 0..frame_len {
-                                if let Some(b) = reader.next() {
+                                cur += 1;
+                                if let b = reader[cur] {
+                                    println!("pushing {:#X} at {}", reader[cur], cur);
                                     data.push(b);
                                 } else {
+                                    println!("breaking bc at next frame");
                                     break;
                                 }
                             }
+                            cur += 1;
                         } else {
-                            continue;
+                            println!("pushing {:#X} at {}", reader[cur-1], cur-1);
+                            data.push(reader[cur - 1]);
+                            println!("pushing {:#X} at {}", reader[cur], cur);
+                            data.push(reader[cur]);
+                            cur += 1;
                         }
                     } else {
                         break;
                     }
                 } else {
-                    continue;
+                    println!("pushing {} at {}", reader[cur], cur);
+                    data.push(b);
+                    cur += 1;
                 }
             } else {
                 break;
@@ -121,8 +134,7 @@ pub mod mpeg {
         Ok(frame_len as u32 - CRC)
     }
 
-    static BITRATES: [[u32; 5]; 16] = [
-        [0,   0,    0,    0,    0], // dummy
+    static BITRATES: [[u32; 5]; 15] = [
         [32,	32,	  32,	  32,	  8],
         [64,	48,	  40,	  48,	  16],
         [96,	56,	  48,	  56,	  24],
@@ -137,7 +149,7 @@ pub mod mpeg {
         [384,	256,	224,	192,	128],
         [416,	320,	256,	224,	144],
         [448,	384,	320,	256,	160],
-        [0,   0,    0,    0,    0], // dummy
+        [0,   0,    0,    0,    0,],
     ];
 
     fn match_bitrate(row: u8, V: &u8, L: &u8) -> u32 {
@@ -153,7 +165,7 @@ pub mod mpeg {
         BITRATES[row as usize][col]
     }
 
-    fn match_sr(bits: &u8, v_id: &u8) -> f64 {
+    fn match_sr(FFGH: &u8, v_id: &u8) -> f64 {
         let base: f64 = match v_id {
             0x3 => 32000f64,
             0x2 => 16000f64,
@@ -161,7 +173,7 @@ pub mod mpeg {
             _   => 0f64,
         };
 
-        let FF = bits >> 2;
+        let FF = FFGH >> 2;
         let sr: f64 = match FF {
             0x0 => base * 1.378125f64,
             0x1 => base * 1.5f64,
@@ -174,15 +186,15 @@ pub mod mpeg {
 
     static mut header_count: u32 = 1;
 
-    fn parse_header<I>(it: &mut I) -> io::Result<Header>
-    where I: Iterator<Item = u8> {
+    // cur is set at the fourth byte in the header
+    fn parse_header(reader: &mut Vec<u8>, cur: &mut usize) -> io::Result<Header> {
         let unex_eof = io::Error::new(io::ErrorKind::UnexpectedEof, "EOF");
         unsafe {
             let count: *const u32 = &raw const header_count;
             println!("Parsing header {}", *count);
         }
         
-        let Some(AAAB_BCCD) = it.next() else { return Err(unex_eof) };
+        let AAAB_BCCD = reader[*cur] else { return Err(unex_eof) };
         // AAA
         // (23-21) = guaranteed set at this point
         //
@@ -240,7 +252,8 @@ pub mod mpeg {
             println!("Protected");
         }
         
-        let Some(EEEE_FFGH) = it.next() else { return Err(unex_eof) };
+        *cur += 1;
+        let EEEE_FFGH = reader[*cur] else { return Err(unex_eof) };
         // EEEE
         // (15,12) = bitrate index
         // this depends on combinations of version (V) and layer (L)
@@ -251,7 +264,7 @@ pub mod mpeg {
         if EEEE == 0 || EEEE == 0xF {
             return Err(io::Error::new(io::ErrorKind::Unsupported, "This application does not support 'free' or 'bad' bitrates"));
         } else {
-            bitrate = match_bitrate(EEEE, &version, &layer);
+            bitrate = match_bitrate(EEEE - 1, &version, &layer);
             println!("Bitrate: {bitrate}");
         }
 
@@ -275,7 +288,8 @@ pub mod mpeg {
         // (8) = private bit
         // ignore
         //
-        let Some(IIJJ_KLMM) = it.next() else { return Err(unex_eof) };
+        *cur += 1;
+        let IIJJ_KLMM = reader[*cur] else { return Err(unex_eof) };
         // I
         // (7,6) = channel mode
         let IIJJ = IIJJ_KLMM >> 4;
