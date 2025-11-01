@@ -15,6 +15,7 @@ pub mod mpeg {
         let mut cur: usize = 0;
         let mut possibles: HashMap<usize, Vec<usize>> = HashMap::new();
 
+        // find any two bytes that look like frame sync
         while cur < file_len {
             if let b = reader[cur] {
                 if b == 0xFF {
@@ -49,31 +50,90 @@ pub mod mpeg {
                 break;
             }
         }
-        
+       
+        // sort possible headers by frequency (most to least frequent)
         let mut vecs: Vec<(&usize, &Vec<usize>)> = possibles.iter().collect();
         vecs.sort_by(|a, b| {
             let al = a.1.len();
             let bl = b.1.len();
             bl.cmp(&al)
         });
-        for i in 0..5 {
-            println!("Value: {:#X}\tInstances: {}", vecs[i].0, vecs[i].1.len());
-            match parse_header(vecs[i].0) {
+       
+        // get a reference header to validate less common headers
+        let mut refheader: Header = Header::new(); 
+        let mut i = 0;
+        loop {
+            let (pos_ref, indices) = vecs[i];
+            match parse_header(pos_ref) {
                 Ok((v, l, p, br, sr, pd, cm)) => {
-                    let header = Header::format(vecs[i].1[0], v, l, p, br, sr, pd, cm);
+                    refheader = Header::format(v, l, p, br, sr, pd, cm);
+                    break;
                 },
                 Err(error) => {
-                    eprintln!("ERROR: {error}");
-                    println!("");
+                    eprintln!("ERROR: {error}\n");
+                }
+            };
+            i += 1;
+        }
+
+        // if a header is valid, compare it to the reference;
+        // if matches the reference, get frame length and collect data
+        let mut valid = 0;
+        let mut frames: Vec<Frame> = Vec::new();
+        for (possible, indices) in vecs {
+            match parse_header(possible) {
+                Ok((v, l, p, br, sr, pd, cm)) => {
+                    let header = Header::format(v, l, p, br, sr, pd, cm);
+                    if refheader.match_ref(&header) {
+                        if let Ok(frame_len) = header.compute_frame_len() {
+                            let skip = match header.protected {
+                                true => 6,
+                                false => 4,
+                            };
+                            
+                            for index in indices {
+                                let mut frame_data: Vec<u8> = Vec::with_capacity(frame_len);
+                                let start = index + skip;
+                                let end = start + frame_len;
+                                for i in start..end {
+                                    frame_data.push(reader[i]);
+                                }
+                                frames.push(Frame::new(*index, frame_data));
+                            }
+
+                            valid += indices.len();
+                        } else {
+                            eprintln!("Frame length improbable");
+                        }
+                    }
+                },
+                Err(error) => {
+                    eprintln!("ERROR: {error}\n");
                 }
             };
         }
-        Ok(Vec::<u8>::new())
+
+        // sort frames by file position to push to data vec in order
+        frames.sort_by(|a,b| {
+            let a_fp = a.file_pos;
+            let b_fp = b.file_pos;
+            a_fp.cmp(&b_fp)
+        });
+
+        let mut data: Vec<u8> = Vec::new();
+        for f in frames {
+            f.give_data(&mut data);
+        }
+
+        println!("{:?}", refheader);
+        println!("Parsed {valid} valid headers");
+        println!("Got {} bytes of data", data.len());
+                
+        Ok(data)
     }
 
     #[derive(Debug)]
     struct Header {
-       file_pos: usize,
        version: f32,
        layer: i32,
        protected: bool,
@@ -84,7 +144,19 @@ pub mod mpeg {
     }
 
     impl Header {
-        fn format(file_pos: usize, version: u8, layer: u8, not_protected: u8, bitrate: u32, sr: f64, padded: u8, channel_mode: u8) -> Self {
+        fn new() -> Self {
+            Self { 
+                version: 0f32, 
+                layer: 0, 
+                protected: false, 
+                bitrate: 0, 
+                sr: 0f64, 
+                padded: false, 
+                channel_mode: 0 
+            }
+        }
+
+        fn format(version: u8, layer: u8, not_protected: u8, bitrate: u32, sr: f64, padded: u8, channel_mode: u8) -> Self {
             let version: f32 = match version {
                 0x0 => 2.5f32,
                 0x2 => 2.0f32,
@@ -110,7 +182,6 @@ pub mod mpeg {
             };
 
             Self {
-                file_pos,
                 version,
                 layer,
                 protected,
@@ -124,30 +195,66 @@ pub mod mpeg {
         fn barf(&self) -> (f32, i32, bool, u32, f64, bool, u8) {
                 (self.version, self.layer, self.protected, self.bitrate, self.sr, self.padded, self.channel_mode)
         }
+
+        fn match_ref(&self, other: &Header) -> bool {
+            if self.version == other.version
+            && self.layer == other.layer
+            && self.sr == other.sr
+            && self.channel_mode == other.channel_mode
+            && self.protected == other.protected {
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        // returns frame length in bytes
+        fn compute_frame_len(&self) -> io::Result<usize> {
+            let (_, layer, protected, br, sr, padded, _) = self.barf();
+       
+            let br: f64 = br as f64 * 1000f64;
+            let frame_len: f64 = match layer {
+                3 => 144f64 * br as f64 / sr,
+                2 => 144f64 * br as f64 / sr,
+                1 => (12f64 * br as f64 / sr) * 4f64,
+                _ => 20f64, // dummy number (this will never trigger)
+            };
+
+            if frame_len < 20f64 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Frame length improbable"));
+            }
+
+            let CRC = match protected {
+                true => 20,
+                false => 4,
+            };
+
+            let padding = match padded {
+                true  => 1,
+                false => 0,
+            };
+
+            // subtract the header and CRC
+            Ok(frame_len as usize - CRC + padding)
+        }
+    }// end impl Header
+
+    // store file position and data while processing valid headers
+    struct Frame {
+        file_pos: usize,
+        data: Vec<u8>,
     }
 
-    // returns frame size in bytes
-    fn compute_frame_len(header: Header) -> io::Result<u32> {
-        let (_, layer, protected, br, sr, _, _) = header.barf();
-       
-        println!("br = {br} sr = {sr}");
-        let br: f64 = br as f64 * 1000f64;
-        let frame_len: f64 = match layer {
-            3 => 144f64 * br as f64 / sr,
-            2 => 144f64 * br as f64 / sr,
-            1 => (12f64 * br as f64 / sr) * 4f64,
-            _ => {
-                return Err(io::Error::new(io::ErrorKind::Unsupported, "Cannot parse reserved layer"))
+    impl Frame {
+        fn new(file_pos: usize, data: Vec<u8>) -> Self {
+            Self { file_pos, data }
+        }
+
+        fn give_data(&self, bank: &mut Vec<u8>) {
+            for d in &self.data {
+                bank.push(*d);
             }
-        };
-
-        let CRC = match protected {
-            true => 20,
-            false => 4,
-        };
-
-        // subtract the header
-        Ok(frame_len as u32 - CRC)
+        }
     }
 
     static BITRATES: [[u32; 5]; 15] = [
@@ -284,12 +391,12 @@ pub mod mpeg {
         match version {
             0x0 => print!("2.5\n"),
             0x1 => {
-                return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported audio version"))
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported audio version id"))
             },
             0x2 => print!("2\n"),
             0x3 => print!("1\n"),
             _   => {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the version id correctly?"))
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid audio version id"))
             },
         };
 
@@ -309,7 +416,7 @@ pub mod mpeg {
             0x2 => print!("II\n"),
             0x3 => print!("I\n"),
             _   => {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the version id correctly?"))
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid layer description"))
             },
         };
 
@@ -343,6 +450,9 @@ pub mod mpeg {
         // varies by V
         let FFGH = EEEE_FFGH & 0x0F;
         let sr: f64 = match_sr(&FFGH, &version);
+        if sr == 0f64 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Sample rate cannot be zero"));
+        }
         println!("Sample rate: {sr}");
 
         // G
@@ -377,7 +487,7 @@ pub mod mpeg {
         // let mode_ext = IIJJ & 0x3;
 
         // bits 3-0 are not pertinent
-        
+       
         println!("");
         Ok((
             version,
