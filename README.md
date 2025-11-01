@@ -11,7 +11,6 @@ src/main.rs:
 src/lib.rs:
 - mpeg
   - parses frames by:
-
     <ol type="1">
       <li>scanning for any two bytes that look like frame sync</li>
       <li>storing possible headers and vectors of indices in a hashmap</li>
@@ -20,7 +19,6 @@ src/lib.rs:
       <li>comparing all other valid headers to the reference</li>
       <li>extracting data from file according to the frame lengths of the valid headers</li>
     </ol>
-
 - aiff
     - parses FORM, COMM, and SSND chunks
 - wav
