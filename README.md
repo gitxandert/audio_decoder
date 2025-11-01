@@ -11,14 +11,12 @@ src/main.rs:
 src/lib.rs:
 - mpeg
     - parses frames by:
-        <ol>
-            <li>scanning for any two bytes that look like frame sync</li>
-            <li>storing possible headers and vectors of indices in a hashmap</li>
-            <li>sorting possible headers from most to least frequent</li>
-            <li>extracting most common valid header as a reference header</li>
-            <li>comparing all other valid headers to the reference</li>
-            <li>extracting data from file according to the frame lengths of the valid headers</li>
-        </ol>
+        \1. scanning for any two bytes that look like frame sync  
+        \2. storing possible headers and vectors of indices in a hashmap  
+        \3. sorting possible headers from most to least frequent  
+        \4. extracting most common valid header as a reference header  
+        \5. comparing all other valid headers to the reference  
+        \6. extracting data from file according to the frame lengths of the valid headers  
 - aiff
     - parses FORM, COMM, and SSND chunks
 - wav
