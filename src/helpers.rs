@@ -5,7 +5,7 @@ use std::ops::{Shl, BitOr, AddAssign};
 // helpers for AIFF and WAV
 //
 // parse groups of num bytes
-//
+
 pub fn parse_bytes<I, T>(bytes: &mut I, num: usize, le: bool) -> io::Result<T>
 where
     I: Iterator<Item = u8>,
@@ -29,7 +29,7 @@ where
 }
 //
 // special function to parse IEEE 80-bit extended floating-point
-fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
+pub fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
     let sign = (bytes[0] & 0x80) != 0;
     let exp = (((bytes[0] & 0x7F) as u16) << 8) | bytes[1] as u16;
 
@@ -63,7 +63,7 @@ fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
 //
 // (dev) print ids
 // TODO: return &str (to retain info from specific IDs)
-fn print_id<I>(iter: &mut I, num: usize)
+pub fn print_id<I>(iter: &mut I, num: usize)
 where I: Iterator<Item = u8> {
     for _ in 0..num {
         if let Some(b) = iter.next() {

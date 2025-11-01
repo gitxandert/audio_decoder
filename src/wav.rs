@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
 
-use crate::{parse_bytes, parse_ieee_extended, print_id};
+use crate::helpers::{parse_bytes, parse_ieee_extended, print_id};
 
 pub mod wav {
     use super::*;
