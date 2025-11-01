@@ -4,11 +4,11 @@ This decoder will parse WAV, MP3, and AIFF data, for integration into my [audio 
 
 ## Current functionality
 
-src/main.rs:
+**src/main.rs**:
 - executes library functions through extension matching
 - catches unsupported formats
 
-src/lib.rs:
+**src/lib.rs**:
 - mpeg
   - parses frames by:
     <ol type="1">
