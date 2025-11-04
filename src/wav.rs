@@ -31,75 +31,107 @@ pub mod wav {
         }
     }
 
+    pub fn print_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) {
+        end += 4;
+
+        for i in start..end {
+            print!("{}", char::from(vec[i]));
+        }
+
+        start = end;
+
+        println!("");
+    }
+
+    fn parse_bytes(bytes: &mut Vec, start: &mut usize, end: &mut usize, inc: usize) -> io::Result<u32> {
+        let mut value: u32 = 0;
+
+        end += inc;
+
+        for i in start..end {
+            let b: u8 = bytes[i]?;
+        
+            // little-endian
+            value += b as u32 << (i as u32 * 8);
+        }
+
+        start = end;
+
+        Ok(value)
+    }
+
     pub fn parse(path: &str) -> io::Result<Vec<u8>> {
         let mut f = File::open(path)?;
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf)?;
+        let mut reader = Vec::new();
+        f.read_to_end(&mut reader)?;
 
-        let mut reader = buf.iter().copied();
- 
-        // read byes little-endian
-        let le: bool = true;     
+        let mut start: u32 = 0;
+        let mut end: u32 = 0;
 
         // RIFF
-        print_id(&mut reader, 4);
+        // (print_id always increments end by four before printing
+        //  and sets start to end afterward)
+        print_id(&mut reader, &mut start, &mut end);
 
-        let riff_size: u32 = parse_bytes(&mut reader, 4, le)?;
+        // (parse_bytes increments end by the integer argument
+        //  before decoding the reader from start to end
+        //  and sets start to end afterward))
+        let riff_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
         println!("Chunk size: {riff_size}");
 
         // WAVE
-        print_id(&mut reader, 4);
+        print_id(&mut reader, &mut start, &mut end);
 
         println!("");
 
         // "fmt "
-        print_id(&mut reader, 4);        
+        print_id(&mut reader, &mut start, &mut end);        
 
-        let fmt_size: u32 = parse_bytes(&mut reader, 4, le)?;
+        let fmt_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
         println!("Chunk size: {}", fmt_size);
 
-        let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, 2, le)?)
+        let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, &mut start, &mut end, 2)?)
         else {
             return Err(io::Error::new(io::ErrorKind::Unsupported,"Unrecognized format"));
         };
         
         println!("Format code: {fmt_tag:?}");
 
-        let n_chan: u32 = parse_bytes(&mut reader, 2, le)?;
+        let n_chan: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
         println!("Num channels: {n_chan}");
 
-        let sample_rate: u32 = parse_bytes(&mut reader, 4, le)?;
+        let sample_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
         println!("Sample rate: {sample_rate}");
 
-        let data_rate: u32 = parse_bytes(&mut reader, 4, le)?;
+        let data_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
         println!("Ave bytes /sec: {data_rate}");
 
-        let data_blk_sz: u32 = parse_bytes(&mut reader, 2, le)?;
+        let data_blk_sz: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
         println!("Block size: {data_blk_sz}");
 
-        let bits_per: u32 = parse_bytes(&mut reader, 2, le)?;
+        let bits_per: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
         println!("Bits per sample: {bits_per}");
 
         // if !WaveFormatPcm (i.e. is extensible)
         if fmt_size >= 18 {
             // extension is either 0 or 22
-            let cb_size: u32 = parse_bytes(&mut reader, 2, le)?;
+            let cb_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
             println!("Extension size: {cb_size}");
 
             if cb_size > 0 {
-                let valid_bits: u32 = parse_bytes(&mut reader, 2, le)?;
+                let valid_bits: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
                 println!("Valid bits per sample: {valid_bits}");
 
-                let dw_channel_mask: u32 = parse_bytes(&mut reader, 4, le)?;
+                let dw_channel_mask: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
                 println!("Speaker position mask: {dw_channel_mask}");
 
-                let old_fmt: u32 = parse_bytes(&mut reader, 2, le)?;
+                let old_fmt: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
                 println!("GUID: {old_fmt}");
 
                 // skip over Microsoft stuff
                 // TODO: compare against audio media subtype
-                for _ in 0..14 {
-                    if let Some(b) = reader.next() {}
+                for i in 0..14 {
+                    print("{}", reader[end + i]);
                 }
                 print!("\n");
             }
