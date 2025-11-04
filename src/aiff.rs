@@ -2,10 +2,73 @@ use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
 
-use crate::helpers::{parse_bytes, parse_ieee_extended, print_id};
-
 pub mod aiff {
     use super::*;
+
+    fn print_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) {
+        end += 4;
+
+        for i in start..end {
+            print!("{}", char::from(vec[i]));
+        }
+
+        start = end;
+
+        println!("");
+    }
+
+    fn parse_bytes(bytes: &mut Vec, start: &mut usize, end: &mut usize, inc: usize) -> io::Result<u32> {
+        let mut value: u32 = 0;
+
+        end += inc;
+
+        // big-endian
+        let mut shift: u32 = 3;
+        for i in start..end {
+            let b: u8 = bytes[i]?;
+
+            value += b as u32 << (shift * 8);
+
+            shift -= 1;
+        }
+
+        start = end;
+
+        Ok(value)
+    }
+    //
+    // special function to parse IEEE 80-bit extended floating-point
+    fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
+        let sign = (bytes[0] & 0x80) != 0;
+        let exp = (((bytes[0] & 0x7F) as u16) << 8) | bytes[1] as u16;
+
+        // 64-bit mantissa (explicit integer bit at bit 63)
+        let mut mant: u64 = 0;
+        for &b in &bytes[2..] {
+            mant = (mant << 8) | b as u64;
+        }
+
+        // Zero
+        if exp == 0 && mant == 0 {
+            return 0.0;
+        }
+
+        // Inf/NaN
+        if exp == 0x7FFF {
+            return if mant == 0 {
+                if sign { f64::NEG_INFINITY } else { f64::INFINITY }
+            } else {
+                f64::NAN
+            };
+        }
+
+        // value = mantissa * 2^(exp - 16383 - 63)
+        let e = (exp as i32) - 16383 - 63;
+        let mut val = (mant as f64) * 2f64.powi(e);
+        if sign { val = -val; }
+
+        val
+    }
 
     // only care about COMM and SSND chunks,
     // so adjust this to search only for those and

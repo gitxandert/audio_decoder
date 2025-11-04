@@ -2,8 +2,6 @@ use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
 
-use crate::helpers::{parse_bytes, parse_ieee_extended, print_id};
-
 pub mod wav {
     use super::*;
 
@@ -48,11 +46,14 @@ pub mod wav {
 
         end += inc;
 
+        // little-endian
+        let mut shift: u32 = 0;
         for i in start..end {
             let b: u8 = bytes[i]?;
         
-            // little-endian
-            value += b as u32 << (i as u32 * 8);
+            value += b as u32 << (shift as u32 * 8);
+
+            shift += 1;
         }
 
         start = end;
