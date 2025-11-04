@@ -1,6 +1,6 @@
 use std::io;
 use audio_decoder::{
-    mpeg::mpeg, aiff::aiff, wav::wav, 
+    mpeg, aiff, wav, 
     decode_helpers::{DecodeError, DecodeResult}
 };
 
@@ -11,12 +11,14 @@ fn main() -> DecodeResult<()> {
         _ => "",
     };
 
-    match ext {
+    // TODO: figure out actual mpeg decoding...
+    /*match ext {
         "mp3" => mpeg::parse(path),
         "wav" => wav::parse(path),
         "aif" => aiff::parse(path),
         _ => return Err(DecodeError::UnsupportedFormat(String::from(ext))),
     }?;
+    */
 
     Ok(())
 }
