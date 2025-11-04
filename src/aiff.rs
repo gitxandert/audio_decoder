@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
-use crate::decode_helpers::{DecodeResult, DecodeError};
+use crate::decode_helpers::{AudioFile, DecodeResult, DecodeError};
 
 fn print_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeResult<()> {
     *end += 4;
@@ -37,7 +37,9 @@ fn parse_bytes(bytes: &mut Vec<u8>, start: &mut usize, end: &mut usize, inc: usi
 
         value += (b as u32) << shift;
 
-        shift -= 8;
+        if shift >= 8 {
+            shift -= 8;
+        }
     }
 
     *start = *end;
@@ -81,7 +83,7 @@ fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
 // only care about COMM and SSND chunks,
 // so adjust this to search only for those and
 // extract the relevant information
-pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
+pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     let mut f = File::open(path)?;
     let mut reader = Vec::new();
     f.read_to_end(&mut reader)?;
@@ -145,5 +147,16 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
     let block_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
     println!("Block size: {block_size}");
 
-    Ok(Vec::<u8>::new())
+    let mut samples: Vec<u8> = Vec::new();
+    end += num_frames as usize;
+
+    for i in start..end {
+        let s = match reader.get(i) {
+            Some(val) => *val,
+            None => return Err(DecodeError::UnexpectedEof),
+        };
+        samples.push(s);
+    }
+
+    Ok(AudioFile::new("aiff", sample_rate as u32, num_channels, sample_size, samples))
 }

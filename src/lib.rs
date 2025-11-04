@@ -18,4 +18,14 @@ mod tests {
             Err(error) => eprintln!("{:?}", error),
         };
     }
+
+    #[test]
+    fn test_aiff() {
+        let path = "assets/winterly.aif";
+
+        match aiff::parse(path) {
+            Ok(file) => println!("{:?}", file),
+            Err(error) => eprintln!("{:?}", error),
+        };
+    }
 }
