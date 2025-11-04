@@ -1,12 +1,13 @@
 use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::collections::HashMap;
+use crate::decode_helpers::{DecodeResult, DecodeError};
 
 pub mod mpeg {
     use super::*;
 
     // iterate through frames by frame size
-    pub fn parse(path: &str) -> io::Result<Vec<u8>> {
+    pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
         let mut f = File::open(path)?;
         let mut reader = Vec::new();
         f.read_to_end(&mut reader)?;
@@ -69,9 +70,7 @@ pub mod mpeg {
                     refheader = Header::format(v, l, p, br, sr, pd, cm);
                     break;
                 },
-                Err(error) => {
-                    eprintln!("ERROR: {error}\n");
-                }
+                Err(error) => eprintln!("{:?}", error),
             };
             i += 1;
         }
@@ -85,31 +84,30 @@ pub mod mpeg {
                 Ok((v, l, p, br, sr, pd, cm)) => {
                     let header = Header::format(v, l, p, br, sr, pd, cm);
                     if refheader.match_ref(&header) {
-                        if let Ok(frame_len) = header.compute_frame_len() {
-                            let skip = match header.protected {
-                                true => 6,
-                                false => 4,
-                            };
+                        match header.compute_frame_len() {
+                            Ok(frame_len) => {
+                                let skip = match header.protected {
+                                    true => 6,
+                                    false => 4,
+                                };
                             
-                            for index in indices {
-                                let mut frame_data: Vec<u8> = Vec::with_capacity(frame_len);
-                                let start = index + skip;
-                                let end = start + frame_len;
-                                for i in start..end {
-                                    frame_data.push(reader[i]);
+                                for index in indices {
+                                    let mut frame_data: Vec<u8> = Vec::with_capacity(frame_len);
+                                    let start = index + skip;
+                                    let end = start + frame_len;
+                                    for i in start..end {
+                                        frame_data.push(reader[i]);
+                                    }
+                                    frames.push(Frame::new(*index, frame_data));
                                 }
-                                frames.push(Frame::new(*index, frame_data));
-                            }
 
-                            valid += indices.len();
-                        } else {
-                            eprintln!("Frame length improbable");
-                        }
+                                valid += indices.len();
+                            },
+                            Err(error) => eprintln!("{:?}", error),
+                        };
                     }
                 },
-                Err(error) => {
-                    eprintln!("ERROR: {error}\n");
-                }
+                Err(error) => eprintln!("{:?}", error),
             };
         }
 
@@ -209,7 +207,7 @@ pub mod mpeg {
         }
 
         // returns frame length in bytes
-        fn compute_frame_len(&self) -> io::Result<usize> {
+        fn compute_frame_len(&self) -> DecodeResult<usize> {
             let (_, layer, protected, br, sr, padded, _) = self.barf();
        
             let br: f64 = br as f64 * 1000f64;
@@ -221,7 +219,7 @@ pub mod mpeg {
             };
 
             if frame_len < 20f64 {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Frame length improbable"));
+                return Err(DecodeError::InvalidData(String::from("Frame length too small")));
             }
 
             let CRC = match protected {
@@ -369,8 +367,8 @@ pub mod mpeg {
     }
 
     // cur is set at the fourth byte in the header
-    fn parse_header(bytes: &usize) -> io::Result<(u8, u8, u8, u32, f64, u8, u8)> {
-        let unex_eof = io::Error::new(io::ErrorKind::UnexpectedEof, "EOF");
+    fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
+        let unex_eof = DecodeError::UnexpectedEof;
         
         let AAAB_BCCD = (bytes >> 16) as u8 else { return Err(unex_eof) };
         // AAA
@@ -391,12 +389,12 @@ pub mod mpeg {
         match version {
             0x0 => print!("2.5\n"),
             0x1 => {
-                return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported audio version id"))
+                return Err(DecodeError::UnsupportedFormat(String::from("Unsupported audio version")));
             },
             0x2 => print!("2\n"),
             0x3 => print!("1\n"),
             _   => {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid audio version id"))
+                return Err(DecodeError::InvalidData(String::from("Invalid audio version id")));
             },
         };
 
@@ -410,13 +408,13 @@ pub mod mpeg {
         print!("Layer ");
         match layer {
             0x0 => {
-                return Err(io::Error::new(io::ErrorKind::Unsupported, "Cannot parse reserved layer"))
+                return Err(DecodeError::UnsupportedFormat(String::from("Cannot parse reserved layer")))
             },
             0x1 => print!("III\n"),
             0x2 => print!("II\n"),
             0x3 => print!("I\n"),
             _   => {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid layer description"))
+                return Err(DecodeError::InvalidData(String::from("Invalid layer description")))
             },
         };
 
@@ -439,7 +437,7 @@ pub mod mpeg {
         let EEEE = EEEE_FFGH >> 4;
         let mut bitrate: u32;
         if EEEE == 0 || EEEE == 0xF {
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "This application does not support 'free' or 'bad' bitrates"));
+            return Err(DecodeError::UnsupportedFormat(String::from("This application does not support 'free' or 'bad' bitrates")));
         } else {
             bitrate = match_bitrate(EEEE - 1, &version, &layer);
             println!("Bitrate: {bitrate}");
@@ -451,7 +449,7 @@ pub mod mpeg {
         let FFGH = EEEE_FFGH & 0x0F;
         let sr: f64 = match_sr(&FFGH, &version);
         if sr == 0f64 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Sample rate cannot be zero"));
+            return Err(DecodeError::InvalidData(String::from("Sample rate cannot be zero")));
         }
         println!("Sample rate: {sr}");
 
@@ -479,7 +477,7 @@ pub mod mpeg {
             0x2 => println!("Dual channel (stereo)"),
             0x3 => println!("Single channel (mono)"),
             _   => {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Did you parse the channel mode correctly?"))
+                return Err(DecodeError::InvalidData(String::from("Invalid channel mode")));
             },
         };
         // J

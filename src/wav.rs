@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
+use crate::decode_helpers::{DecodeError, DecodeResult};
 
 pub mod wav {
     use super::*;
@@ -29,50 +30,59 @@ pub mod wav {
         }
     }
 
-    pub fn print_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) {
-        end += 4;
+    pub fn print_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeResult<()> {
+        *end += 4;
 
-        for i in start..end {
-            print!("{}", char::from(vec[i]));
+        for i in *start..*end {
+            let c = match vec.get(i) {
+                Some(val)   => val,
+                None    => return Err(DecodeError::UnexpectedEof),
+            };
+            print!("{}", char::from(*c));
         }
 
-        start = end;
+        *start = *end;
 
         println!("");
+
+        Ok(())
     }
 
-    fn parse_bytes(bytes: &mut Vec, start: &mut usize, end: &mut usize, inc: usize) -> io::Result<u32> {
+    fn parse_bytes(bytes: &mut Vec<u8>, start: &mut usize, end: &mut usize, inc: usize) -> DecodeResult<u32> {
         let mut value: u32 = 0;
 
-        end += inc;
+        *end += inc;
 
         // little-endian
         let mut shift: u32 = 0;
-        for i in start..end {
-            let b: u8 = bytes[i]?;
+        for i in *start..*end {
+            let b: u8 = match bytes.get(i) {
+                Some(val) => *val,
+                None => return Err(DecodeError::UnexpectedEof),
+            };
         
-            value += b as u32 << (shift as u32 * 8);
+            value += (b as u32) << shift;
 
-            shift += 1;
+            shift += 8;
         }
 
-        start = end;
+        *start = *end;
 
         Ok(value)
     }
 
-    pub fn parse(path: &str) -> io::Result<Vec<u8>> {
+    pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
         let mut f = File::open(path)?;
         let mut reader = Vec::new();
         f.read_to_end(&mut reader)?;
 
-        let mut start: u32 = 0;
-        let mut end: u32 = 0;
+        let mut start: usize= 0;
+        let mut end: usize = 0;
 
         // RIFF
         // (print_id always increments end by four before printing
         //  and sets start to end afterward)
-        print_id(&mut reader, &mut start, &mut end);
+        print_id(&mut reader, &mut start, &mut end)?;
 
         // (parse_bytes increments end by the integer argument
         //  before decoding the reader from start to end
@@ -81,19 +91,19 @@ pub mod wav {
         println!("Chunk size: {riff_size}");
 
         // WAVE
-        print_id(&mut reader, &mut start, &mut end);
+        print_id(&mut reader, &mut start, &mut end)?;
 
         println!("");
 
         // "fmt "
-        print_id(&mut reader, &mut start, &mut end);        
+        print_id(&mut reader, &mut start, &mut end)?;        
 
         let fmt_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
         println!("Chunk size: {}", fmt_size);
 
-        let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, &mut start, &mut end, 2)?)
+        let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, &mut start, &mut end, 2)?.try_into().unwrap())
         else {
-            return Err(io::Error::new(io::ErrorKind::Unsupported,"Unrecognized format"));
+            return Err(DecodeError::UnsupportedFormat(String::from("Unrecognized format tag")));
         };
         
         println!("Format code: {fmt_tag:?}");
@@ -131,8 +141,9 @@ pub mod wav {
 
                 // skip over Microsoft stuff
                 // TODO: compare against audio media subtype
+                // also actually increment end
                 for i in 0..14 {
-                    print("{}", reader[end + i]);
+                    print!("{}", reader[end + i]);
                 }
                 print!("\n");
             }
