@@ -1,6 +1,6 @@
 use std::io;
 use audio_decoder::{
-    mpeg, aiff, wav, 
+    mpeg, aiff, wav,
     decode_helpers::{DecodeError, DecodeResult}
 };
 
