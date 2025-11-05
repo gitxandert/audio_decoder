@@ -158,7 +158,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     let data_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
     println!("Data size: {data_size}");
    
-    let mut samples: Vec<u8> = vec![0u8; data_size as usize];
+    let mut samples: Vec<u8> = Vec::new();
     
     end += data_size as usize;
     for i in start..end {
