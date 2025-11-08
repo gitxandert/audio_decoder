@@ -30,7 +30,7 @@ mod tests {
 
         let af = match aiff::parse(path) {
             Ok(file) => file,
-            Err(error) => panic!("Error with file"),
+            Err(error) => panic!("{:?}", error),
         };
 
         play_file(af);
