@@ -1,6 +1,6 @@
 # Audio Decoder
 
-This decoder will parse WAV, MP3, and AIFF data, for integration into my [audio scripting project](https://github.com/gitxandert/audio_scripting). 
+This decoder parses WAV, AIFF, and MPEG audio files and will soon decode MP3 files. It also provides rudimentary playback capabilities by interacting with the ALSA API. This library will be integrated into my [audio scripting project](https://github.com/gitxandert/audio_scripting), replacing some the latter's current dependencies.
 
 ## Current functionality
 
