@@ -42,24 +42,7 @@ pub fn play_file(af: AudioFile) {
         hwp.get_channels().unwrap(),
         hwp.get_format().unwrap());
 
-    let mut samples_i16 = Vec::with_capacity(af.samples.len() / 2);
-    match af.format.as_str() {
-        "wave" => {
-            for chunk in af.samples.chunks_exact(2) {
-                samples_i16.push(i16::from_le_bytes([chunk[0], chunk[1]]));
-            }
-        },
-        "aiff" => {
-            for chunk in af.samples.chunks_exact(2) {
-                samples_i16.push(i16::from_be_bytes([chunk[0], chunk[1]]));
-            }
-        },
-        _ => return,
-    };
-    
-    println!("Before write: {:?}", pcm.state());
-
-    for chunk in samples_i16.chunks(period_size as usize * af.num_channels as usize) {
+    for chunk in af.samples.chunks(period_size as usize * af.num_channels as usize) {
         io.writei(chunk).unwrap_or_else(|err| {
             if err.errno() == 32 {
                 pcm.prepare().unwrap();

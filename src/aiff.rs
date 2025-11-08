@@ -153,15 +153,20 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     let block_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
     println!("Block size: {block_size}");
 
-    let mut samples: Vec<u8> = Vec::new();
+    let mut samples: Vec<i16> = Vec::new();
     end += ssnd_size as usize;
 
-    for i in start..end {
-        let s = match reader.get(i) {
+    for i in (start..end).step_by(2) {
+        let s1 = match reader.get(i) {
             Some(val) => *val,
             None => return Err(DecodeError::UnexpectedEof),
         };
-        samples.push(s);
+        let s2 = match reader.get(i + 1) {
+            Some(val) => *val,
+            None => return Err(DecodeError::UnexpectedEof),
+        };
+
+        samples.push(i16::from_be_bytes([s1, s2]));
     }
 
     Ok(AudioFile::new("aiff", sample_rate as u32, num_channels, sample_size, samples))
