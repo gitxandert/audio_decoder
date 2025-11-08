@@ -1,3 +1,7 @@
+use std::io;
+use std::thread;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use alsa::{Direction, ValueOr};
 use alsa::pcm::{PCM, HwParams, Format, Access, State};
 
@@ -42,16 +46,94 @@ pub fn play_file(af: AudioFile) {
         hwp.get_channels().unwrap(),
         hwp.get_format().unwrap());
 
-    for chunk in af.samples.chunks(period_size as usize * af.num_channels as usize) {
-        io.writei(chunk).unwrap_or_else(|err| {
-            if err.errno() == 32 {
-                pcm.prepare().unwrap();
-                0
-            } else { panic!("ALSA error: {err}"); }
-        });
+    let mut buf = Arc::new(Mutex::new(RingBuffer::new(period_size)));
+    loop {
+        let mut cmd = String::new();
+
+        io::stdin()
+            .read_line(&mut cmd)
+            .expect("Failed to read command");
+        let cmd = cmd.trim();
+
+        match cmd {
+            "q" | "quit" => break,
+            "start" => {
+                match pcm.state() {
+                    State::Paused => pcm.pause(false).unwrap(),
+                    State::Running => continue,
+                    _ => {
+                        let af_samples = af.samples.clone();
+                        let buf1 = Arc::clone(&buf);
+                        thread::spawn(move || {
+                            for chunk in af_samples
+                                .chunks(period_size as usize * af.num_channels as usize) {
+                                let mut buffer = buf1.lock().unwrap();
+                                loop {
+                                    println!("looping");
+                                    if !buffer.empty {
+                                        println!("sleeping...");
+                                        thread::sleep(Duration::from_millis(1));
+                                    } else {
+                                        println!("pushing");
+                                        buffer.push(chunk);
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    },
+                };
+            },
+            "pause" => pcm.pause(true).unwrap(),
+            "stop" => {
+                pcm.pause(true).unwrap();
+                pcm.reset().unwrap();
+            },
+            _ => continue,
+        };
+        
+        let mut buf1 = buf.lock().unwrap();
+        if !buf1.empty {
+            for chunk in buf1.samples.chunks(period_size as usize * af.num_channels as usize) {
+                io.writei(chunk).unwrap_or_else(|err| {
+                    if err.errno() == 32 {
+                        pcm.prepare().unwrap();
+                        0
+                    } else { panic!("ALSA error: {err}"); }
+                });
+            }
+            buf1.reset();
+        }
     }
 
-    println!("After write: {:?}", pcm.state());
-    
     pcm.drain().unwrap();
+}
+
+struct RingBuffer {
+    samples: Vec<i16>,
+    empty: bool,
+}
+
+impl RingBuffer {
+    fn new(size: i64) -> Self {
+        Self {
+            samples: Vec::with_capacity(size as usize),
+            empty: true,
+        }
+    }
+
+    fn push<'a>(&mut self, chunks: &'a [i16]) {
+        if self.empty {
+            for c in chunks {
+                println!("Pushing {}", *c);
+                self.samples.push(*c);
+            }
+            self.empty = false;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.samples.clear();
+        self.empty = true;
+    }
 }
