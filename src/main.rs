@@ -1,33 +1,24 @@
 use std::io;
+use audio_decoder::{
+    mpeg, aiff, wav,
+    decode_helpers::{DecodeError, DecodeResult}
+};
 
-use audio_decoder::{mpeg::mpeg, aiff::aiff, wav::wav};
-
-fn main() -> Result<(), ParseError<'static>> {
-    let path = "assets/lazy_beat.mp3";
+fn main() -> DecodeResult<()> {
+    let path = "assets/fairies.wav";
     let ext: &str = match path.rsplit_once(|b: char| b == '.') {
         Some((before, after)) if !before.is_empty() && !after.is_empty() => after,
         _ => "",
     };
 
-    match ext {
+    // TODO: figure out actual mpeg decoding...
+    /*match ext {
         "mp3" => mpeg::parse(path),
         "wav" => wav::parse(path),
         "aif" => aiff::parse(path),
-        _ => return Err(ParseError::UnsupportedFormat(ext)),
+        _ => return Err(DecodeError::UnsupportedFormat(String::from(ext))),
     }?;
+    */
 
     Ok(())
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub enum ParseError<'a> {
-    UnsupportedFormat(&'a str),
-    Io(io::Error),
-}
-
-impl From<io::Error> for ParseError<'_> {
-    fn from(e: io::Error) -> Self {
-        Self::Io(e)
-    }
 }
