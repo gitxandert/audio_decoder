@@ -28,7 +28,7 @@ fn parse_bytes(bytes: &mut Vec<u8>, start: &mut usize, end: &mut usize, inc: usi
     *end += inc;
 
     // big-endian
-    let mut shift: u32 = 24;
+    let mut shift: u32 = 8 * inc as u32 - 8;
     for i in *start..*end {
         let b: u8 = match bytes.get(i) {
             Some(val) => *val,
@@ -48,7 +48,20 @@ fn parse_bytes(bytes: &mut Vec<u8>, start: &mut usize, end: &mut usize, inc: usi
 }
 //
 // special function to parse IEEE 80-bit extended floating-point
-fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
+fn parse_ieee_extended(reader: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeResult<f64> {
+    let mut bytes = [0u8; 10];
+    *end += 10;
+    let mut i = 0;
+    for byte in *start..*end {
+        let b = match reader.get(byte) {
+            Some(val) => val,
+            None => return Err(DecodeError::UnexpectedEof),
+        };
+        bytes[i] = *b;
+        i += 1;
+    }
+    *start = *end;
+
     let sign = (bytes[0] & 0x80) != 0;
     let exp = (((bytes[0] & 0x7F) as u16) << 8) | bytes[1] as u16;
 
@@ -60,15 +73,15 @@ fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
 
     // Zero
     if exp == 0 && mant == 0 {
-        return 0.0;
+        return Ok(0.0);
     }
 
     // Inf/NaN
     if exp == 0x7FFF {
         return if mant == 0 {
-            if sign { f64::NEG_INFINITY } else { f64::INFINITY }
+            if sign { Ok(f64::NEG_INFINITY) } else { Ok(f64::INFINITY) }
         } else {
-            f64::NAN
+            Ok(f64::NAN)
         };
     }
 
@@ -77,7 +90,7 @@ fn parse_ieee_extended(bytes: [u8; 10]) -> f64 {
     let mut val = (mant as f64) * 2f64.powi(e);
     if sign { val = -val; }
 
-    val
+    Ok(val)
 }
 
 // only care about COMM and SSND chunks,
@@ -109,7 +122,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     if comm_size == 18 {
         println!("Comm size: {comm_size}");
     } else {
-        eprintln!("Comm size not 18; que?");
+        return Err(DecodeError::InvalidData(String::from("Comm size should be 18")));
     }
 
     let num_channels: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
@@ -121,15 +134,8 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     let sample_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
     println!("Sample size: {sample_size}");
 
-    // 80 bit floating-point sample rate
-    let mut rate_bytes = [0u8; 10];
-    end += 10;
-    let mut i = 0;
-    for _ in start..end {
-        rate_bytes[i] = reader[i];
-        i += 1;
-    }
-    let sample_rate: f64 = parse_ieee_extended(rate_bytes);
+
+    let sample_rate: f64 = parse_ieee_extended(&mut reader, &mut start, &mut end)?;
     println!("Sample rate: {sample_rate}");
     
     println!("");
@@ -137,7 +143,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     // SSND
     print_id(&mut reader, &mut start, &mut end)?;
 
-    let ssnd_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
+    let ssnd_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)? - 8;
     println!("Data size: {ssnd_size}");
 
     // typically 0
@@ -148,7 +154,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     println!("Block size: {block_size}");
 
     let mut samples: Vec<u8> = Vec::new();
-    end += num_frames as usize;
+    end += ssnd_size as usize;
 
     for i in start..end {
         let s = match reader.get(i) {
