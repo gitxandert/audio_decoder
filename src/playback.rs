@@ -1,11 +1,17 @@
-use std::io;
-use std::thread;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use alsa::{Direction, ValueOr};
-use alsa::pcm::{PCM, HwParams, Format, Access, State};
-
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
+use alsa::{
+    Direction, ValueOr,
+    pcm::{PCM, HwParams, Format, Access, State},
+};
 use crate::decode_helpers::AudioFile;
+
+#[derive(Clone, Copy, PartialEq)]
+enum PlayState { Stopped, Running, Paused, Quit }
 
 pub fn play_file(af: AudioFile) {
     /*
@@ -24,116 +30,91 @@ pub fn play_file(af: AudioFile) {
     let hwp = HwParams::any(&pcm).unwrap();
     hwp.set_channels(af.num_channels).unwrap();
     hwp.set_rate(af.sample_rate, ValueOr::Nearest).unwrap();
-
     hwp.set_format(Format::S16LE).unwrap();
-
     hwp.set_access(Access::RWInterleaved).unwrap();
     pcm.hw_params(&hwp).unwrap();
     let io = pcm.io_i16().unwrap();
-
+    let period_size = hwp.get_period_size().unwrap() as usize;
+    let chunk_size = period_size * af.num_channels as usize;
+ 
+    /*
+    not sure yet if the following is necessary
     // Make sure we don't start the stream too early
-    let period_size = hwp.get_period_size().unwrap();
-    let buffer_size = hwp.get_buffer_size().unwrap();
     let hwp = pcm.hw_params_current().unwrap();
     let swp = pcm.sw_params_current().unwrap();
-    swp.set_avail_min(period_size);
-    swp.set_start_threshold(period_size).unwrap();
+    swp.set_start_threshold(100).unwrap();
     pcm.sw_params(&swp).unwrap();
+    */
 
-    println!("period size = {period_size}, buffer size = {buffer_size}");
-    println!("rate = {}, chans = {}, fmt={:?}",
-        hwp.get_rate().unwrap(),
-        hwp.get_channels().unwrap(),
-        hwp.get_format().unwrap());
+    let state = Arc::new(Mutex::new(PlayState::Stopped));
+    let state_for_repl = Arc::clone(&state);
 
-    let mut buf = Arc::new(Mutex::new(RingBuffer::new(period_size)));
+    println!("");
+    thread::spawn(move || {
+        loop {
+            print!("> ");
+            io::stdout().flush().unwrap();
+            let mut cmd = String::new();
+            io::stdin()
+                .read_line(&mut cmd)
+                .expect("Failed to read command");
+            let cmd = cmd.trim();
+            let mut s = state_for_repl.lock().unwrap();
+            match cmd {
+                "start" => *s = PlayState::Running,
+                "pause" => *s = PlayState::Paused,
+                "stop" => *s = PlayState::Stopped,
+                "q" | "quit" => {
+                    *s = PlayState::Quit;
+                    break;
+                }
+                _ => println!("Unknown command '{cmd}'"),
+            }
+        }
+    });
+
+    let mut idx = 0;
     loop {
-        let mut cmd = String::new();
-
-        io::stdin()
-            .read_line(&mut cmd)
-            .expect("Failed to read command");
-        let cmd = cmd.trim();
-
-        match cmd {
-            "q" | "quit" => break,
-            "start" => {
-                match pcm.state() {
-                    State::Paused => pcm.pause(false).unwrap(),
-                    State::Running => continue,
-                    _ => {
-                        let af_samples = af.samples.clone();
-                        let buf1 = Arc::clone(&buf);
-                        thread::spawn(move || {
-                            for chunk in af_samples
-                                .chunks(period_size as usize * af.num_channels as usize) {
-                                let mut buffer = buf1.lock().unwrap();
-                                loop {
-                                    println!("looping");
-                                    if !buffer.empty {
-                                        println!("sleeping...");
-                                        thread::sleep(Duration::from_millis(1));
-                                    } else {
-                                        println!("pushing");
-                                        buffer.push(chunk);
-                                        break;
-                                    }
-                                }
-                            }
-                        });
-                    },
-                };
-            },
-            "pause" => pcm.pause(true).unwrap(),
-            "stop" => {
-                pcm.pause(true).unwrap();
-                pcm.reset().unwrap();
-            },
-            _ => continue,
-        };
-        
-        let mut buf1 = buf.lock().unwrap();
-        if !buf1.empty {
-            for chunk in buf1.samples.chunks(period_size as usize * af.num_channels as usize) {
-                io.writei(chunk).unwrap_or_else(|err| {
-                    if err.errno() == 32 {
-                        pcm.prepare().unwrap();
-                        0
-                    } else { panic!("ALSA error: {err}"); }
-                });
+        let s = *state.lock().unwrap();
+        match s {
+            PlayState::Quit => break,
+            PlayState::Stopped => {
+                idx = 0;
+                pcm.reset();
+                thread::sleep(Duration::from_millis(100));
             }
-            buf1.reset();
+            PlayState::Paused => {
+                if pcm.state() == State::Running {
+                    pcm.pause(true).ok();
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            PlayState::Running => {
+                if pcm.state() == State::Paused {
+                    pcm.pause(false).ok();
+                } else if pcm.state() != State::Running {
+                    pcm.prepare().unwrap();
+                }
+                if idx >= af.samples.len() {
+                    *state.lock().unwrap() = PlayState::Stopped;
+                    continue;
+                }
+                let end = (idx + chunk_size).min(af.samples.len());
+                let chunk = &af.samples[idx..end];
+                match io.writei(chunk) {
+                    Ok(frames) => idx += frames as usize * af.num_channels as usize,
+                    Err(error) => {
+                        if error.errno() == 32 { 
+                            pcm.prepare().unwrap(); 
+                        } else {
+                            println!("Error: {:?}", error);
+                        }
+                    }
+                }
+            }
         }
     }
 
+    pcm.drop().unwrap();
     pcm.drain().unwrap();
-}
-
-struct RingBuffer {
-    samples: Vec<i16>,
-    empty: bool,
-}
-
-impl RingBuffer {
-    fn new(size: i64) -> Self {
-        Self {
-            samples: Vec::with_capacity(size as usize),
-            empty: true,
-        }
-    }
-
-    fn push<'a>(&mut self, chunks: &'a [i16]) {
-        if self.empty {
-            for c in chunks {
-                println!("Pushing {}", *c);
-                self.samples.push(*c);
-            }
-            self.empty = false;
-        }
-    }
-
-    fn reset(&mut self) {
-        self.samples.clear();
-        self.empty = true;
-    }
 }
