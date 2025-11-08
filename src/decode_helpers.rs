@@ -20,11 +20,11 @@ pub struct AudioFile {
     pub sample_rate: u32,
     pub num_channels: u32,
     pub bits_per_sample: u32,
-    pub samples: Vec<u8>,
+    pub samples: Vec<i16>,
 }
 
 impl AudioFile {
-    pub fn new(format: &str, sample_rate: u32, num_channels: u32, bits_per_sample: u32, samples: Vec<u8>) -> Self {
+    pub fn new(format: &str, sample_rate: u32, num_channels: u32, bits_per_sample: u32, samples: Vec<i16>) -> Self {
         Self {
             format: format.to_string(),
             sample_rate,
