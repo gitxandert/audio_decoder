@@ -21,12 +21,7 @@ pub fn play_file(af: AudioFile) {
     hwp.set_channels(af.num_channels).unwrap();
     hwp.set_rate(af.sample_rate, ValueOr::Nearest).unwrap();
 
-    let format = match af.format.as_str() {
-        "wav" => Format::S16LE,
-        "aiff" => Format::S16BE,
-        _ => panic!("Unsupported format"),
-    };
-    hwp.set_format(format).unwrap();
+    hwp.set_format(Format::S16LE).unwrap();
 
     hwp.set_access(Access::RWInterleaved).unwrap();
     pcm.hw_params(&hwp).unwrap();
@@ -48,9 +43,19 @@ pub fn play_file(af: AudioFile) {
         hwp.get_format().unwrap());
 
     let mut samples_i16 = Vec::with_capacity(af.samples.len() / 2);
-    for chunk in af.samples.chunks_exact(2) {
-        samples_i16.push(i16::from_le_bytes([chunk[0], chunk[1]]));
-    }
+    match af.format.as_str() {
+        "wave" => {
+            for chunk in af.samples.chunks_exact(2) {
+                samples_i16.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+            }
+        },
+        "aiff" => {
+            for chunk in af.samples.chunks_exact(2) {
+                samples_i16.push(i16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+        },
+        _ => return,
+    };
     
     println!("Before write: {:?}", pcm.state());
 
