@@ -10,9 +10,6 @@ use alsa::{
 };
 use crate::decode_helpers::AudioFile;
 
-#[derive(Clone, Copy, PartialEq)]
-enum PlayState { Stopped, Running, Paused, Quit }
-
 pub fn play_file(af: AudioFile) {
     /*
      * struct AudioFile {
@@ -20,7 +17,7 @@ pub fn play_file(af: AudioFile) {
      *     sample_rate: u32,
      *     num_channels: u32,
      *     bits_per_sample: u32,
-     *     samples: Vec<u8>,
+     *     samples: Vec<i16>,
      * }
     */
     // Open default playback device
@@ -34,20 +31,15 @@ pub fn play_file(af: AudioFile) {
     hwp.set_access(Access::RWInterleaved).unwrap();
     pcm.hw_params(&hwp).unwrap();
     let io = pcm.io_i16().unwrap();
+    
     let period_size = hwp.get_period_size().unwrap() as usize;
-    let chunk_size = period_size * af.num_channels as usize;
+    let num_channels = hwp.get_channels().unwrap() as usize;
  
-    /*
-    not sure yet if the following is necessary
-    // Make sure we don't start the stream too early
-    let hwp = pcm.hw_params_current().unwrap();
-    let swp = pcm.sw_params_current().unwrap();
-    swp.set_start_threshold(100).unwrap();
-    pcm.sw_params(&swp).unwrap();
-    */
+    let conductor = Arc::new(Mutex::new(Conductor::prepare(num_channels, period_size)));
+    let cond_for_repl = Arc::clone(&conductor);
 
-    let state = Arc::new(Mutex::new(PlayState::Stopped));
-    let state_for_repl = Arc::clone(&state);
+    let running = Arc::new(Mutex::new(true));
+    let running_for_repl = Arc::clone(&running);
 
     println!("");
     thread::spawn(move || {
@@ -59,13 +51,14 @@ pub fn play_file(af: AudioFile) {
                 .read_line(&mut cmd)
                 .expect("Failed to read command");
             let cmd = cmd.trim();
-            let mut s = state_for_repl.lock().unwrap();
+            let con = cond_for_repl.lock().unwrap();
+            let mut r = running_for_repl.lock().unwrap();
             match cmd {
-                "start" => *s = PlayState::Running,
-                "pause" => *s = PlayState::Paused,
-                "stop" => *s = PlayState::Stopped,
+                "start" => con.add_voice(&af),
+                "pause" => con.voices.get(0).active = false,
+                "stop" => con.voices.pop(),
                 "q" | "quit" => {
-                    *s = PlayState::Quit;
+                    *r = false;
                     break;
                 }
                 _ => println!("Unknown command '{cmd}'"),
@@ -73,48 +66,111 @@ pub fn play_file(af: AudioFile) {
         }
     });
 
-    let mut idx = 0;
-    loop {
-        let s = *state.lock().unwrap();
-        match s {
-            PlayState::Quit => break,
-            PlayState::Stopped => {
-                idx = 0;
-                pcm.reset();
-                thread::sleep(Duration::from_millis(100));
-            }
-            PlayState::Paused => {
-                if pcm.state() == State::Running {
-                    pcm.pause(true).ok();
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-            PlayState::Running => {
-                if pcm.state() == State::Paused {
-                    pcm.pause(false).ok();
-                } else if pcm.state() != State::Running {
-                    pcm.prepare().unwrap();
-                }
-                if idx >= af.samples.len() {
-                    *state.lock().unwrap() = PlayState::Stopped;
-                    continue;
-                }
-                let end = (idx + chunk_size).min(af.samples.len());
-                let chunk = &af.samples[idx..end];
-                match io.writei(chunk) {
-                    Ok(frames) => idx += frames as usize * af.num_channels as usize,
-                    Err(error) => {
-                        if error.errno() == 32 { 
-                            pcm.prepare().unwrap(); 
-                        } else {
-                            println!("Error: {:?}", error);
-                        }
-                    }
-                }
-            }
-        }
+    let mut out_buf = vec![0i16; period_size * num_channels];
+
+    while running {
+        let con = conductor.lock().unwrap();
+        con.coordinate(&mut out_buf);
+        io.writei(&out_buf).unwrap();
     }
 
     pcm.drop().unwrap();
     pcm.drain().unwrap();
 }
+
+struct Conductor {
+    voices: Vec<Voice>,
+    out_channels: usize,
+    period_size: usize,
+}
+
+impl Conductor {
+    fn prepare(out_channels: usize, period_size: usize) -> Self {
+        let voices: Vec<Voice> = Vec::new();
+
+        Self { voices, out_channels, period_size }
+    }
+
+    fn coordinate(&mut self, out_buf: &mut [i16]) {
+        for s in out_buf.iter_mut() {
+            *s = 0;
+        }
+
+        for frame in 0..self.period_size {
+            for ch in 0..self.out_channels {
+                let out_idx = frame * self.out_channels + ch;
+                let mut acc = 0f32;
+            
+                for voice in &mut self.voices {
+                    voice.process(&mut acc, frame, ch);
+                }
+
+                out_buf[out_idx] = acc.clamp(-32767.0, 32767.0) as i16;
+            }
+        }
+    }
+}
+
+struct Voice {
+    samples: Arc<Vec<i16>>,
+    sample_rate: u32,
+    channels: usize,
+    position: f32, 
+    speed: f32,   
+    direction: f32,
+    gain: f32,
+    active: bool,
+}
+
+impl Voice {
+    fn new(af: &AudioFile) -> Self {
+        Self {
+            samples: Arc::new(af.samples.clone()),
+            sample_rate: af.sample_rate, 
+            channels: af.num_channels, 
+            position: 0.0,
+            speed: 1.0,
+            direction: 1.0, 
+            gain: 1.0, 
+            active: false
+        }
+    }
+
+    fn process(&mut self, acc: &mut f32; frame: usize, ch: usize) {
+        if !self.active { continue; }
+
+        let idx = self.position as usize;
+        if idx + 1 >= self.samples.len() / self.channels {
+            self.active = false;
+            continue;
+        }
+
+        // if there are more output channels than the track has
+        // recorded into, then skip putting info into the extra
+        // channels, unless the track is mono and there are two 
+        // output channels, in which case, output the same samples 
+        // through both channels
+        if self.channels == 1 {
+            if ch < 2 {
+                ch = 0;
+            } else {
+                continue;
+            }
+        } else if ch >= self.channels {
+            continue;
+        }
+
+        // linear interpolation
+        let frac = self.position.fract();
+        let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
+        let s1 = self.samples[((idx + 1) * self.channels) + (ch % self.channels)] as f32;
+        let sample = s0 * (1.0 - frac) + s1 * frac;
+
+        *acc += sample * voice.gain;
+
+        // advance
+        self.position += self.direction * self.speed;
+    }
+}
+
+
