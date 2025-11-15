@@ -22,7 +22,7 @@ pub fn play_file(af: AudioFile) {
      * }
     */
     // Open default playback device
-    let pcm = PCM::new("default", Direction::Playback, false).unwrap();
+    let pcm = PCM::new("hw:0,0", Direction::Playback, false).unwrap();
 
     // Set hardware parameters
     let hwp = HwParams::any(&pcm).unwrap();
@@ -33,7 +33,18 @@ pub fn play_file(af: AudioFile) {
     pcm.hw_params(&hwp).unwrap();
     let io = pcm.io_i16().unwrap();
     
-    let period_size = hwp.get_period_size().unwrap() as usize;
+    let period_size: usize = 1024;
+    let buffer_size = 1024 * 16;
+    println!("Min period_size: {:?} Min buffer_size: {:?}", hwp.get_period_size_min().unwrap(), hwp.get_buffer_size_min().unwrap());
+    println!("Accepted rate: {:?}", hwp.get_rate().unwrap());
+    hwp.set_period_size(period_size as i64, ValueOr::Nearest).unwrap();
+    hwp.set_buffer_size(buffer_size).unwrap();
+
+    let swp = pcm.sw_params_current().unwrap();
+    swp.set_start_threshold(1).unwrap();
+    swp.set_avail_min(period_size as i64).unwrap();
+    pcm.sw_params(&swp).unwrap();
+
     let num_channels = hwp.get_channels().unwrap() as usize;
 
     let mut tracks: Vec<AudioFile> = Vec::new();
@@ -64,6 +75,7 @@ pub fn play_file(af: AudioFile) {
                 "start" => con.add_voice(args),
                 "pause" => con.pause_voice(args),
                 "resume" => con.resume_voice(args),
+                "velocity" => con.set_velocity(args),
                 "stop" => con.stop_voice(args),
                 "q" | "quit" => {
                     running_for_repl.store(false, Ordering::SeqCst);
@@ -71,12 +83,14 @@ pub fn play_file(af: AudioFile) {
                 }
                 _ => println!("Unknown command '{cmd}'"),
             }
+            drop(con);
         }
     });
-
+/*
     if pcm.state() != State::Running {
         pcm.start().unwrap();
     }
+*/
     let mut out_buf = vec![0i16; period_size * num_channels];
     while running.load(Ordering::SeqCst) {
         let mut con = conductor.lock().unwrap();
@@ -139,25 +153,58 @@ impl Conductor {
         eprintln!("Err: Could not find track '{name}'");
     }
 
-    fn pause_voice(&self, name: &str) {
-        for voice in &self.voices {
+    fn pause_voice(&mut self, name: &str) {
+        for voice in &mut self.voices {
             if voice.name == name {
-                voice.active == false;
+                voice.active = false;
                 return;
             }
         }
         eprintln!("Err: Could not find voice '{name}'");
     }
 
-    fn resume_voice(&self, name: &str) {
-        for voice in &self.voices {
+    fn resume_voice(&mut self, name: &str) {
+        for voice in &mut self.voices {
             if voice.name == name {
-                voice.active == true;
+                voice.active = true;
                 return;
             }
         }
         eprintln!("Err: Could not find voice '{name}'");
     }
+
+    fn set_velocity(&mut self, args: &str) {
+        let mut args = args.splitn(2, ' ');
+        let name = match args.next() {
+            Some(string) => string,
+            None => {
+                eprintln!("Err: not enough arguments for velocity");
+                return;
+            }
+        };
+        let velocity = match args.next() {
+            Some(num) => num.parse::<f32>().unwrap(),
+            None => {
+                eprintln!("Err: not enough arguments for velocity");
+                return;
+            }
+        };
+        match args.next() {
+            Some(extra) => {
+                eprintln!("Err: too many args for velocity");
+                return;
+            }
+            None => (),
+        }        
+        for voice in &mut self.voices {
+            if voice.name == name {
+                voice.velocity = velocity;
+                return;
+            }
+        }
+        eprintln!("Err: Could not find voice '{name}'");
+    }
+
 
     fn stop_voice(&mut self, name: &str) {
         let mut i = 0;
@@ -178,8 +225,7 @@ struct Voice {
     sample_rate: u32,
     channels: usize,
     position: f32,
-    speed: f32,  
-    direction: f32,
+    velocity: f32,  
     gain: f32,
     active: bool,
 }
@@ -192,8 +238,7 @@ impl Voice {
             sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
             position: 0.0,
-            speed: 1.0,
-            direction: 1.0, 
+            velocity: 1.0,
             gain: 1.0, 
             active: true,
         }
@@ -203,8 +248,13 @@ impl Voice {
         if !self.active { return; }
 
         let idx = self.position as usize;
-        if idx + 1 >= self.samples.len() / self.channels {
+        if idx + 1 >= self.samples.len() / self.channels || self.position < 0.0 {
             self.active = false;
+            if self.velocity > 0.0 {
+                self.position = 0.0;
+            } else {
+                self.position = (self.samples.len() as f32 / self.channels as f32) - 2.0;
+            }
             return;
         }
 
@@ -213,6 +263,8 @@ impl Voice {
         // channels, unless the track is mono and there are two 
         // output channels, in which case, output the same samples 
         // through both channels
+        //
+        // this is a hack; def need a better routing system later
         if self.channels == 1 {
             if ch < 2 {
                 ch = 0;
@@ -232,7 +284,9 @@ impl Voice {
         *acc += sample * self.gain;
 
         // advance
-        self.position += self.direction * self.speed;
+        if ch == self.channels - 1 {
+            self.position += self.velocity;
+        }
     }
 }
 
