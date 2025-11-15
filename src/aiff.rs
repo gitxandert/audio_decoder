@@ -122,7 +122,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     if comm_size == 18 {
         println!("Comm size: {comm_size}");
     } else {
-        return Err(DecodeError::InvalidData(String::from("Comm size should be 18")));
+        return Err(DecodeError::InvalidData("Comm size should be 18".to_string()));
     }
 
     let num_channels: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
@@ -169,5 +169,15 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         samples.push(i16::from_be_bytes([s1, s2]));
     }
 
-    Ok(AudioFile::new("aiff", sample_rate as u32, num_channels, sample_size, samples))
+    let file_name: &str = match path.rsplit_once(|b: char| b == '.') {
+        Some((before, after)) if !before.is_empty() && !after.is_empty() => {
+            match before.rsplit_once(|b: char| b == '/') {
+                Some((assets, name)) => name,
+                None => return Err(DecodeError::InvalidData("File is not nested".to_string())),
+            }
+        }
+        _ => return Err(DecodeError::InvalidData("File has no name".to_string())),
+    };
+
+    Ok(AudioFile::new(file_name, "aiff", sample_rate as u32, num_channels, sample_size, samples))
 }
