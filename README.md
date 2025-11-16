@@ -1,14 +1,27 @@
-# Audio Decoder
+# GART: Generative Audio in Real Time
 
-This decoder parses WAV, AIFF, and MPEG audio files and will soon decode MP3 files. It also provides rudimentary playback capabilities by interacting with the ALSA API. This library will be integrated into my [audio scripting project](https://github.com/gitxandert/audio_scripting), replacing some the latter's current dependencies.
+This project aims to facilitate real-time, generative audio in Rust. It will feature a scripting language that can be both interpreted and compiled into Rust code.
 
-## Current functionality
+## Dependencies
+
+One of the goals of this project is to realize as many features as possible with as few dependencies as possible. It currently only uses the `alsa` and `libc` crates for interaction with OS audio and terminal internals.
+
+## Modules
 
 **src/main.rs**:
-- executes library functions through extension matching
-- catches unsupported formats
+- executes audio parsing library functions through extension matching
+- catches unsupported audio formats
 
-**lib modules**:
+**src/lib.rs**:
+- exposes modules to main.rs and hosts testing
+
+**src/playback.rs**  
+- configures ALSA according to (currently) a single audio file's parameters
+- interacts directly with hardware for low-latency buffering
+- interprets rudimentary playback commands through a REPL
+- uses terminal in raw mode for custom output to the screen
+
+**parsing modules**:
 - mpeg
   - parses frames by:
     <ol type="1">
@@ -21,15 +34,11 @@ This decoder parses WAV, AIFF, and MPEG audio files and will soon decode MP3 fil
     </ol>
   - TODO: implement actual decoding of compressed data  
 - wav
-  - parses RIFF, fmt, and data chunks
+  - parses RIFF, fmt, and data chunks sequentially
   - returns sample_rate, num_channels, bits_per_sample, and samples (little-endian) in an AudioFile struct
 - aiff
-  - parses FORM, COMM, and SSND chunks
+  - parses FORM, COMM, and SSND chunks sequentially
   - returns sample_rate, num_channels, bits_per_sample, and samples (big-endian) in an AudioFile struct
-- playback
-  - utilizes ALSA crate for simple playback of parsed audio files
-  - formats hardware parameters according to AudioFile fields
-  - institutes REPL for rudimentary playback control (start, pause, stop, [q]uit)
 - decode_helpers  
   - implements custom DecodeErrors and DecodeResult for in-memory file parsing  
   - provides AudioFile struct to return necessary data for audio APIs, including:  
@@ -37,11 +46,10 @@ This decoder parses WAV, AIFF, and MPEG audio files and will soon decode MP3 fil
     - number of channels  
     - bits per sample  
     - extracted samples
-- lib.rs  
-  - exposes modules to main.rs and hosts testing
 
 ## Documents consulted
 
-[DataVoyage's informal MPEG overview](http://mpgedit.org/mpgedit/mpeg_format/mpeghdr.htm#MPEG%20HEADER)  
-[Original AIFF-1.3 specification](https://mmsp.ece.mcgill.ca/Documents/AudioFormats/AIFF/Docs/AIFF-1.3.pdf)  
-[McGill on WAVE](https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html)  
+**Audio specs**:  
+- [DataVoyage's informal MPEG overview](http://mpgedit.org/mpgedit/mpeg_format/mpeghdr.htm#MPEG%20HEADER)  
+- [Original AIFF-1.3 specification](https://mmsp.ece.mcgill.ca/Documents/AudioFormats/AIFF/Docs/AIFF-1.3.pdf)  
+- [McGill on WAVE](https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html)
