@@ -4,7 +4,7 @@ This project aims to facilitate real-time, generative audio in Rust. It will fea
 
 ## Dependencies
 
-One of the goals of this project is to realize as many features as possible with as few dependencies as possible. It currently only uses the `alsa` and `libc` crates for interaction with OS audio and terminal internals.
+One of the goals of this project is to realize as many features as possible with as few dependencies as possible. It currently only uses the `alsa-sys` and `libc` crates for interaction with OS audio and terminal internals.
 
 ## Modules
 
@@ -17,7 +17,7 @@ One of the goals of this project is to realize as many features as possible with
 
 **src/playback.rs**  
 - configures ALSA according to (currently) a single audio file's parameters
-- interacts directly with hardware for low-latency buffering
+- interacts directly with hardware and the DMA buffer for low-latency writes
 - interprets rudimentary playback commands through a REPL
 - uses terminal in raw mode for custom output to the screen
 
