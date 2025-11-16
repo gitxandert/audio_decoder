@@ -1,5 +1,5 @@
 use std::io;
-use audio_decoder::{
+use gart::{
     mpeg, aiff, wav,
     decode_helpers::{DecodeError, DecodeResult},
     playback::play_file,
