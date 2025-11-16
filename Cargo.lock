@@ -29,6 +29,7 @@ name = "audio_decoder"
 version = "0.1.0"
 dependencies = [
  "alsa",
+ "libc",
 ]
 
 [[package]]

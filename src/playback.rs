@@ -1,8 +1,10 @@
+use std::os::unix::io::AsRawFd;
+use libc::{termios, tcgetattr, tcsetattr, cfmakeraw, TCSANOW};
 use std::{
-    io::{self, Write},
+    io::{self, Read, Write},
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use alsa::{
     Direction, ValueOr,
@@ -56,55 +58,148 @@ pub fn play_file(af: AudioFile) {
     let running = Arc::new(AtomicBool::new(true));
     let running_for_repl = running.clone();
 
-    println!("");
-    thread::spawn(move || {
-        loop {
-            print!("> ");
-            io::stdout().flush().unwrap();
-            let mut cmd = String::new();
-            io::stdin()
-                .read_line(&mut cmd)
-                .expect("Failed to read command");
-            let cmd = cmd.trim();
-            let mut parts = cmd.splitn(2, ' ');
-            let cmd = parts.next().unwrap();
-            let args = parts.next().unwrap_or_else(|| "");
+    // take over STDIN
+    let marker = Arc::new(Mutex::new(0usize));
+    let buffer = Arc::new(Mutex::new(String::new()));
+    let repl_chars = ['^', 'X', 'v', '>', 'X', '<', 'Z'];
 
-            let mut con = cond_for_repl.lock().unwrap();
-            match cmd {
-                "start" => con.add_voice(args),
-                "pause" => con.pause_voice(args),
-                "resume" => con.resume_voice(args),
-                "velocity" => con.set_velocity(args),
-                "stop" => con.stop_voice(args),
-                "q" | "quit" => {
-                    running_for_repl.store(false, Ordering::SeqCst);
-                    break;
+    {
+        let marker = marker.clone();
+        let buffer = buffer.clone();
+        thread::spawn(move || {
+            let mut last_len = 0;
+            let now = Instant::now();
+            loop {
+                {
+                    if now.elapsed().as_millis() % 100 == 0 {
+                        let mut m = marker.lock().unwrap();
+                        *m = (*m + 1) % repl_chars.len();
+                    }
                 }
-                _ => println!("Unknown command '{cmd}'"),
+
+                {
+                    let m = *marker.lock().unwrap();
+                    let buf = buffer.lock().unwrap();
+                    let curr_len = buf.len();
+                    print!("\r{} {}", repl_chars[m], *buf);
+
+                    if last_len > curr_len {
+                        let diff = last_len - curr_len;
+                        for _ in 0..diff {
+                            print!(" ");
+                        }
+
+                        print!("\x1b[{}D", diff);
+                    }
+                    last_len = curr_len;
+
+                    std::io::stdout().flush().unwrap();
+                }
             }
-            drop(con);
-        }
-    });
-/*
-    if pcm.state() != State::Running {
-        pcm.start().unwrap();
+        });
     }
-*/
+ 
+    raw_mode("on");
+
+    println!("");
+    {
+        let buffer = buffer.clone();
+        thread::spawn(move || {
+            loop {
+                let c = read_char();
+               
+                match c {
+                    b'\n' | b'\r' => {
+                        print!("\n");
+                        let mut buf = buffer.lock().unwrap();
+                        let mut cmd = buf.clone();
+                        let mut parts = cmd.splitn(2, ' ');
+                        let cmd = parts.next().unwrap();
+                        let args = parts.next().unwrap_or_else(|| "");
+
+                        let mut con = cond_for_repl.lock().unwrap();
+                        match cmd {
+                            "start" => con.add_voice(args),
+                            "pause" => con.pause_voice(args),
+                            "resume" => con.resume_voice(args),
+                            "velocity" => con.set_velocity(args),
+                            "stop" => con.stop_voice(args),
+                            "q" | "quit" => {
+                                running_for_repl.store(false, Ordering::SeqCst);
+                                break;
+                            }
+                            _ => println!("Unknown command '{cmd}'"),
+                        }
+                        buf.clear();
+                    }
+                    127 => {
+                        // backspace
+                        let mut buf = buffer.lock().unwrap();
+                        if !buf.is_empty() {
+                            buf.pop();
+                        }
+                    }
+                    3 => {
+                        // CTL + C
+                        raw_mode("off");
+                        let mut buf = buffer.lock().unwrap();
+                        buf.clear();
+                        println!("\nInterrupted.");
+                        std::process::exit(130);
+                    }
+                    _ => {
+                        let mut buf = buffer.lock().unwrap();
+                        buf.push(c as char);
+                    }
+                }
+            }
+        });
+    }
+
     let mut out_buf = vec![0i16; period_size * num_channels];
     while running.load(Ordering::SeqCst) {
         let mut con = conductor.lock().unwrap();
         con.coordinate(&mut out_buf);
         drop(con);
     
-        // for some reason, this only plays when I stop the
-        // track that is being written to the buffer; the track
-        // also plays back twice as fast
         io.writei(&out_buf).unwrap();
     }
 
+    raw_mode("off");
+    print!("\n");
     pcm.drop().unwrap();
-    pcm.drain().unwrap();
+    pcm.drain().unwrap();  
+}
+
+static mut ORIG_TERM: Option<termios> = None;
+
+fn raw_mode(switch: &str) {
+    unsafe {
+        let fd = libc::STDIN_FILENO;
+
+        let mut term: termios = std::mem::zeroed();
+        tcgetattr(fd, &mut term);
+
+        match switch {
+            "on" => {
+                ORIG_TERM = Some(term);
+                let mut raw = term;
+                cfmakeraw(&mut raw);
+                tcsetattr(fd, TCSANOW, &raw);
+            }
+            _ => {
+                if let Some(orig) = ORIG_TERM {
+                    tcsetattr(fd, TCSANOW, &orig);
+                }
+            }
+        };
+    }
+}
+
+fn read_char() -> u8 {
+    let mut buf = [0u8; 1];
+    std::io::stdin().read_exact(&mut buf).unwrap();
+    buf[0]
 }
 
 struct Conductor {
