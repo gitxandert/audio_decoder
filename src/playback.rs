@@ -284,7 +284,7 @@ impl Voice {
         *acc += sample * self.gain;
 
         // advance
-        if ch == self.channels - 1 {
+        if ch == self.channels - 1 && self.channels != 1 {
             self.position += self.velocity;
         }
     }
