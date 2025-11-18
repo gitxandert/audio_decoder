@@ -1,4 +1,3 @@
-use std::io;
 use gart::{
     mpeg, aiff, wav,
     decode_helpers::{DecodeError, DecodeResult},

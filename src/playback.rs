@@ -2,7 +2,7 @@ use alsa_sys::*;
 use std::os::unix::io::AsRawFd;
 use libc::{
     self, 
-    c_int, EAGAIN,
+    c_int, EAGAIN, EPIPE,
     termios, tcgetattr, tcsetattr, cfmakeraw, TCSANOW};
 use std::{
     ptr,
@@ -34,7 +34,7 @@ pub fn play_file(af: AudioFile) {
     let mut tracks: Vec<AudioFile> = Vec::new();
     println!("Adding {} to tracks", af.file_name);
     tracks.push(af);
-    let conductor = Arc::new(Mutex::new(Conductor::prepare(num_channels, period_size, tracks)));
+    let conductor = Arc::new(Mutex::new(Conductor::prepare(num_channels as usize, tracks)));
     let cond_for_repl = Arc::clone(&conductor);
 
     // take over STDIN
@@ -152,7 +152,7 @@ pub fn play_file(af: AudioFile) {
         let mut handle: *mut snd_pcm_t = ptr::null_mut();
         let dev = CString::new("hw:0,0").unwrap();
 
-        check(
+        check_code(
             snd_pcm_open(
                 &mut handle,
                 dev.as_ptr(),
@@ -167,30 +167,30 @@ pub fn play_file(af: AudioFile) {
         snd_pcm_hw_params_malloc(&mut hw);
         snd_pcm_hw_params_any(handle, hw);
 
-        check(
+        check_code(
             snd_pcm_hw_params_set_access(handle, hw, SND_PCM_ACCESS_MMAP_INTERLEAVED),
             "set_access",
         );
-        check(
+        check_code(
             snd_pcm_hw_params_set_format(handle, hw, SND_PCM_FORMAT_S16_LE),
             "set_format",
         );
-        check(snd_pcm_hw_params_set_channels(handle, hw, num_channels) "set channels");
-        check(snd_pcm_hw_params_set_rate(handle, hw, sample_rate, 0), "set_rate");
+        check_code(snd_pcm_hw_params_set_channels(handle, hw, num_channels), "set_ channels");
+        check_code(snd_pcm_hw_params_set_rate(handle, hw, sample_rate, 0), "set_rate");
 
         let mut period_size: snd_pcm_uframes_t = 128;
-        check(
-            snd_pcm_hw_params_set_period_size_near(handle, hw, &mut period_size, 0),
+        check_code(
+            snd_pcm_hw_params_set_period_size_near(handle, hw, &mut period_size, 0 as *mut i32),
             "set_period_size",
         );
 
         let mut buffer_size: snd_pcm_uframes_t = period_size * 4;
-        check(
+        check_code(
             snd_pcm_hw_params_set_buffer_size_near(handle, hw, &mut buffer_size),
             "set_buffer_size",
         );
 
-        check(snd_pcm_hw_params(handle, hw), "snd_pcm_hw_params");
+        check_code(snd_pcm_hw_params(handle, hw), "snd_pcm_hw_params");
         snd_pcm_hw_params_free(hw);
 
         // config software params
@@ -198,27 +198,30 @@ pub fn play_file(af: AudioFile) {
         snd_pcm_sw_params_malloc(&mut sw);
         snd_pcm_sw_params_current(handle, sw);
 
+        let mut boundary: snd_pcm_uframes_t = 0;
+        snd_pcm_sw_params_get_boundary(sw, &mut boundary);
+        snd_pcm_sw_params_set_stop_threshold(handle, sw, boundary);
         // start immediately upon write
-        check(snd_pcm_sw_params_set_start_threshold(handle, sw, 0), "set_start_threshold");
+        check_code(snd_pcm_sw_params_set_start_threshold(handle, sw, period_size), "set_start_threshold");
 
         // wake when period is available
-        check(
+        check_code(
             snd_pcm_sw_params_set_avail_min(handle, sw, period_size),
             "set_avail_min",
         );
 
-        check(snd_pcm_sw_params(handle, sw), "snd_pcm_sw_params");
+        check_code(snd_pcm_sw_params(handle, sw), "snd_pcm_sw_params");
         snd_pcm_sw_params_free(sw);
 
         // prepare device
-        check(snd_pcm_prepare(handle), "snd_pcm_prepare");
-
+        check_code(snd_pcm_prepare(handle), "snd_pcm_prepare");
+       
         loop {
             if TERM_RECEIVED.load(Ordering::Relaxed) {
                 break;
             }
 
-            let mut avail = snd_pcm_avail_update(handle);
+            let mut avail = snd_pcm_avail_update(handle) as i32;
             if avail == -EPIPE {
                 // underrun
                 snd_pcm_recover(handle, avail, 1);
@@ -250,14 +253,11 @@ pub fn play_file(af: AudioFile) {
                     break;
                 }
 
-                let areas = std::slice::from_raw_parts(areas_ptr, 2);
-
                 // write to DMA buffer
-                // TODO: update coordinate logic
-                let con = conductor.lock().unwrap();
-                conductor.coordinate(&mut areas_ptr, &mut offset, &mut frames);
+                let mut con = conductor.lock().unwrap();
+                let written = con.coordinate(areas_ptr, offset, frames);
 
-                let committed = snd_pcm_mmap_commit(handle, offset, frames);
+                let committed = snd_pcm_mmap_commit(handle, offset, frames) as i32;
                 if committed < 0 {
                     snd_pcm_recover(handle, committed, 1);
                     break;
@@ -265,9 +265,13 @@ pub fn play_file(af: AudioFile) {
 
                 remaining -= committed as snd_pcm_uframes_t;
             }
+            if snd_pcm_state(handle) != SND_PCM_STATE_RUNNING {
+                snd_pcm_start(handle);
+            }
         }
     }
 
+    buffer.lock().unwrap().clear();
     raw_mode("off");
 }
 
@@ -281,11 +285,12 @@ unsafe fn check_code(code: c_int, ctx: &str) {
 }
 
 // signal and panic handlers
-
-static TERM_RECEIVED: AtomicBool = AtomicBool::new(false);
 //
+static TERM_RECEIVED: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn handle_sigterm(_sig: libc::c_int) {
     TERM_RECEIVED.store(true, Ordering::Relaxed);
+    raw_mode("off");
 }
 
 fn install_sigterm_handler() {
@@ -300,8 +305,6 @@ fn install_sigterm_handler() {
         // register
         libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
     }
-
-    raw_mode("off");
 }
 
 fn install_panic_hook() {
@@ -349,37 +352,47 @@ fn read_char() -> u8 {
 struct Conductor {
     voices: Vec<Voice>,
     out_channels: usize,
-    period_size: usize,
     tracks: Vec<AudioFile>
 }
 
 impl Conductor {
-    fn prepare(out_channels: usize, period_size: usize, tracks: Vec<AudioFile>) -> Self {
+    fn prepare(out_channels: usize, tracks: Vec<AudioFile>) -> Self {
         Self { 
             voices: Vec::<Voice>::new(), 
             out_channels, 
-            period_size,
             tracks
         }
     }
 
-    fn coordinate(&mut self, out_buf: &mut [i16]) {
-        for s in out_buf.iter_mut() {
-            *s = 0;
-        }
+    fn coordinate(&mut self, areas_ptr: *const snd_pcm_channel_area_t, offset: snd_pcm_uframes_t, frames: snd_pcm_uframes_t) -> usize {
+        let mut written: usize = 0;
+        unsafe {
+            let areas = std::slice::from_raw_parts(areas_ptr, self.out_channels);
 
-        for frame in 0..self.period_size {
-            for ch in 0..self.out_channels {
-                let out_idx = frame * self.out_channels + ch;
-                let mut acc = 0f32;
+            for f in 0..frames {
+                for ch in 0..self.out_channels {
+                    let a = &areas[ch];
+                    let base = a.addr as *mut u8;
+
+                    // ALSA channel area addressing
+                    let bit_offset = a.first as isize + (offset + f) as isize * a.step as isize;
+                    let byte_offset = bit_offset / 8;
+
+                    let sample_ptr = base.offset(byte_offset) as *mut i16;
             
-                for voice in &mut self.voices {
-                    voice.process(&mut acc, frame, ch);
-                }
+                    unsafe {
+                        *sample_ptr = 0;
+                    }
 
-                out_buf[out_idx] = acc.clamp(-32767.0, 32767.0) as i16;
+                    for voice in &mut self.voices {
+                        voice.process(sample_ptr, f, ch);
+                    }
+
+                    written += 1;
+                }
             }
         }
+        written
     }
 
     fn add_voice(&mut self, name: &str) {
@@ -483,7 +496,7 @@ impl Voice {
         }
     }
 
-    fn process(&mut self, acc: &mut f32, frame: usize, mut ch: usize) {
+    fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
         if !self.active { return; }
 
         let idx = self.position as usize;
@@ -520,10 +533,12 @@ impl Voice {
         let s1 = self.samples[((idx + 1) * self.channels) + (ch % self.channels)] as f32;
         let sample = s0 * (1.0 - frac) + s1 * frac;
 
-        *acc += sample * self.gain;
+        unsafe {
+            *acc += (sample * self.gain) as i16;
+        }
 
         // advance
-        if ch == self.channels - 1 && self.channels != 1 {
+        if ch == self.channels - 1 {
             self.position += self.velocity;
         }
     }
