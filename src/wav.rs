@@ -35,12 +35,10 @@ pub fn print_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> Decode
             Some(val)   => val,
             None    => return Err(DecodeError::UnexpectedEof),
         };
-        print!("{}", char::from(*c));
     }
 
     *start = *end;
 
-    println!("");
 
     Ok(())
 }
@@ -85,69 +83,51 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     //  before decoding the reader from start to end
     //  and sets start to end afterward))
     let riff_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-    println!("Chunk size: {riff_size}");
 
     // WAVE
     print_id(&mut reader, &mut start, &mut end)?;
-
-    println!("");
 
     // "fmt "
     print_id(&mut reader, &mut start,&mut end)?;        
 
     let fmt_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-    println!("Chunk size: {}", fmt_size);
 
     let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, &mut start, &mut end, 2)?.try_into().unwrap())
     else {
         return Err(DecodeError::UnsupportedFormat(String::from("Unrecognized format tag")));
     };
     
-    println!("Format code: {fmt_tag:?}");
-
     let num_channels: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
-    println!("Num channels: {num_channels}");
-
+    
     let sample_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-    println!("Sample rate: {sample_rate}");
 
     let data_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-    println!("Ave bytes /sec: {data_rate}");
 
     let data_blk_sz: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
-    println!("Block size: {data_blk_sz}");
 
     let bits_per_sample: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
-    println!("Bits per sample: {bits_per_sample}");
 
     // if !WaveFormatPcm (i.e. is extensible)
     if fmt_size >= 18 {
         // extension is either 0 or 22
         let cb_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
-        println!("Extension size: {cb_size}");
 
         if cb_size > 0 {
             let valid_bits: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
-            println!("Valid bits per sample: {valid_bits}");
 
             let dw_channel_mask: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-            println!("Speaker position mask: {dw_channel_mask}");
 
             let old_fmt: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
-            println!("GUID: {old_fmt}");
 
             // skip over Microsoft stuff
             // TODO: compare against audio media subtype
             for i in 0..14 {
                 end += i;
-                print!("{}", reader[end]);
             }
             start = end;
-            print!("\n");
         }
     }
 
-    println!("");
 
     //
     // TODO: parse "fact" chunk if non-PCM (and if exists)
@@ -156,7 +136,6 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     // "data"
     print_id(&mut reader, &mut start, &mut end)?;
     let data_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-    println!("Data size: {data_size}");
    
     let mut samples: Vec<i16> = Vec::new();
     
