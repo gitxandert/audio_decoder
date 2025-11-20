@@ -5,7 +5,7 @@ pub mod decode_helpers;
 pub mod playback;
 
 use decode_helpers::{DecodeResult, DecodeError, AudioFile};
-use playback::play_file;
+use playback::run_gart;
 
 #[cfg(test)]
 mod tests {
@@ -21,7 +21,7 @@ mod tests {
             Err(error) => panic!("Error with file"),
         };
 
-        play_file(af);
+        run_gart(vec![af], af.sample_rate, af.num_channels);
     }
 
     #[test]
@@ -33,6 +33,6 @@ mod tests {
             Err(error) => panic!("{:?}", error),
         };
 
-        play_file(af);
+        run_gart(vec![af], af.sample_rate, af.num_channels);
     }
 }

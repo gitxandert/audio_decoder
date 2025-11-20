@@ -6,34 +6,18 @@ use libc::{
     termios, tcgetattr, tcsetattr, cfmakeraw, TCSANOW};
 use std::{
     ptr,
+    thread,
     ffi::CString,
     io::{self, Read, Write},
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
-    thread,
     time::{Duration, Instant},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
 };
 
 use crate::decode_helpers::AudioFile;
 
-pub fn play_file(af: AudioFile) {
-    /*
-     * struct AudioFile {
-     *     file_name: String,
-     *     format: String,      // file type (WAV, AIFF)
-     *     sample_rate: u32,
-     *     num_channels: u32,
-     *     bits_per_sample: u32,
-     *     samples: Vec<i16>,
-     * }
-    */
-    
+pub fn run_gart(tracks: Vec<AudioFile>, sample_rate: u32, num_channels: u32) {
     // initialize audio engine and tracks
-    let sample_rate = af.sample_rate;
-    let num_channels = af.num_channels;
     
-    let mut tracks: Vec<AudioFile> = Vec::new();
-    println!("Adding {} to tracks", af.file_name);
-    tracks.push(af);
     let conductor = Arc::new(Mutex::new(Conductor::prepare(num_channels as usize, tracks)));
     let cond_for_repl = Arc::clone(&conductor);
 
