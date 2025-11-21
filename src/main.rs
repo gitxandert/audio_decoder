@@ -1,5 +1,5 @@
 use std::fs;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use gart::{
     mpeg, aiff, wav,
     decode_helpers::{DecodeError, DecodeResult, AudioFile},
@@ -7,7 +7,7 @@ use gart::{
 };
 
 fn main() -> DecodeResult<()> {
-    let mut tracks = Vec::<AudioFile>::new();
+    let mut tracks = HashMap::<String, AudioFile>::new();
     let mut sample_rates = HashMap::<u32, u32>::new();
     let mut channel_nums = Vec::<u32>::new();
 
@@ -75,7 +75,13 @@ fn main() -> DecodeResult<()> {
         *sample_rates.entry(track.sample_rate).or_insert(0) += 1;
         channel_nums.push(track.num_channels);
         
-        tracks.push(track);
+        match tracks.entry(track.file_name.clone()) {
+            Entry::Vacant(e) => { e.insert(track);}
+            Entry::Occupied(_) => {
+                println!("Error: multiple files with the same name {}", track.file_name);
+                continue;
+            }
+        }
     }
 
     let mutual_rate: u32 = {
@@ -110,8 +116,8 @@ fn main() -> DecodeResult<()> {
     };
 
     println!("Loaded tracks [");
-    for track in &tracks {
-        println!("\t{}", track.file_name);
+    for (track, _) in &tracks {
+        println!("\t{}", track);
     }
     println!("]");
 
