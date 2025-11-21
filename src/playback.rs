@@ -29,16 +29,15 @@ pub fn run_gart(tracks: Vec<AudioFile>, sample_rate: u32, num_channels: u32) {
     {
         let marker = marker.clone();
         let buffer = buffer.clone();
+        let sr = sample_rate.clone();
         thread::spawn(move || {
             let mut last_len = 0;
-            let now = Instant::now();
             loop {
                 {
                     // every 100 ms, change the REPL marker
-                    if now.elapsed().as_millis() % 100 == 0 {
-                        let mut m = marker.lock().unwrap();
-                        *m = (*m + 1) % repl_chars.len();
-                    }
+                    let mut m = marker.lock().unwrap();
+                    let tenth = (clock::current() / (sr as u64 / 10u64));
+                    *m = tenth as usize % repl_chars.len();
                 }
 
                 {
@@ -89,7 +88,6 @@ pub fn run_gart(tracks: Vec<AudioFile>, sample_rate: u32, num_channels: u32) {
                             "load" => con.load_voice(args),
                             "start" => con.start_voice(args),
                             "pause" => con.pause_voice(args),
-                            "loop" => con.loop_voice(args),
                             "stop" => con.stop_voice(args),
                             "unload" => con.unload_voice(args),
                             "velocity" => con.set_velocity(args),
@@ -386,23 +384,6 @@ struct TempoState {
     sample_rate: f32,
 }
 
-enum TempoUnit {
-    Samples { state: TempoState },
-    MilliSeconds { state: TempoState },
-    Bpm { state: TempoState },
-}
-
-impl TempoUnit {
-    fn new(self) -> Option<Arc<Mutex<dyn TempoGroup + Send>>> {
-        match self {
-            TempoUnit::Samples { state } => Some(Arc::new(Mutex::new(Samples { state } ))),
-            TempoUnit::MilliSeconds { state } => Some(Arc::new(Mutex::new(MilliSeconds { state } ))),
-            TempoUnit::Bpm { state } => Some(Arc::new(Mutex::new(Bpm { state } ))),
-            _ => None,
-        }
-    }
-}
-
 struct Samples {
     state: TempoState,
 }
@@ -502,11 +483,12 @@ impl Conductor {
     fn start_voice(&mut self, name: &str) {
         for voice in &mut self.voices {
             if voice.name == name {
-                voice.active = true;
-                if voice.position > voice.end {
-                    voice.position = 0.0;
-                } else if voice.position < 0.0 {
-                    voice.position = voice.end;
+                let state = &mut voice.state;
+                state.active = true;
+                if state.position > voice.end as f32 {
+                    state.position = 0.0;
+                } else if state.position < 0.0 {
+                    state.position = voice.end as f32;
                 }
                 return;
             }
@@ -517,13 +499,14 @@ impl Conductor {
     fn pause_voice(&mut self, name: &str) {
         for voice in &mut self.voices {
             if voice.name == name {
-                voice.active = false;
+                voice.state.active = false;
                 return;
             }
         }
         println!("\nErr: Could not find voice '{name}'");
     }
 
+    /* TODO: turn loop into a Process
     fn loop_voice(&mut self, name: &str) {
         for voice in &mut self.voices {
             if voice.name == name {
@@ -533,14 +516,16 @@ impl Conductor {
         }
         println!("\nErr: Could not find voice '{name}'");
     }
+    */
 
     fn stop_voice(&mut self, name: &str) {
         for voice in &mut self.voices {
             if voice.name == name {
-                voice.active = false;
-                voice.position = match voice.velocity > 0.0 {
+                let state = &mut voice.state;
+                state.active = false;
+                state.position = match state.velocity >= 0.0 {
                     true => 0.0,
-                    false => voice.end,
+                    false => voice.end as f32,
                 };
                 return;
             }
@@ -585,7 +570,7 @@ impl Conductor {
         }        
         for voice in &mut self.voices {
             if voice.name == name {
-                voice.velocity = velocity;
+                voice.state.velocity = velocity;
                 return;
             }
         }
@@ -593,50 +578,49 @@ impl Conductor {
     }
 }
 
+struct VoiceState {
+    active: bool,
+    position: f32,
+    velocity: f32,
+    gain: f32,
+}
+
 struct Voice {
     name: String,
     samples: Arc<Vec<i16>>,
-    end: f32,
+    end: usize,
     sample_rate: u32,
     channels: usize,
-    position: f32,
-    velocity: f32,  
-    gain: f32,
-    active: bool,
-    _loop: bool,
+    state: VoiceState,  
     processes: Vec<Arc<Mutex<dyn Process + Send>>>,
 }
 
 impl Voice {
     fn new(af: &AudioFile) -> Self {
-        let end = (af.samples.len() / af.num_channels as usize) as f32 - 2.0;
+        let end = af.samples.len() / af.num_channels as usize;
+        let state = VoiceState {
+            active: false,
+            position: 0.0,
+            velocity: 1.0,
+            gain: 1.0,
+        };
+
         Self {
             name: af.file_name.clone(),
             samples: Arc::new(af.samples.clone()),
-            end: end,
+            end,
             sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
-            position: 0.0,
-            velocity: 1.0,
-            gain: 1.0, 
-            active: false,
-            _loop: false,
+            state,
             processes: Vec::<Arc<Mutex<dyn Process + Send>>>::new(),
         }
     }
 
     fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
-        if !self.active { return; }
+        if !self.state.active { return; }
 
-        let idx = self.position as usize;
-        if idx + 1 >= (self.end + 1.0) as usize || self.position < 0.0 {
-            if !self._loop { self.active = false; }
-
-            if self.velocity > 0.0 {
-                self.position = 0.0;
-            } else {
-                self.position = self.end;
-            }
+        let idx = self.state.position as usize;
+        if idx > self.end || idx < 0 {
             return;
         }
 
@@ -657,25 +641,27 @@ impl Voice {
             return;
         }
 
+        let state = &mut self.state;
+
         // processing
         for p in &self.processes {
             let mut proc = p.lock().unwrap();
-            proc.process(self);
+            proc.process(state);
         }
 
         // linear interpolation
-        let frac = self.position.fract();
+        let frac = state.position.fract();
         let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
         let s1 = self.samples[((idx + 1) * self.channels) + (ch % self.channels)] as f32;
         let sample = s0 * (1.0 - frac) + s1 * frac;
 
         unsafe {
-            *acc += (sample * self.gain) as i16;
+            *acc += (sample * state.gain) as i16;
         }
 
         // advance
         if ch == self.channels - 1 {
-            self.position += self.velocity;
+            state.position += state.velocity;
         }
     }
 }
@@ -690,7 +676,7 @@ impl Voice {
 // to more adequately accommodate this pipeline
 //
 trait Process: Send {
-    fn process(&mut self, voice: &mut Voice);
+    fn process(&mut self, voice: &mut VoiceState);
 }
 
 struct Seq {
@@ -711,7 +697,7 @@ impl Process for Seq {
        let first: usize = match args.next() {
            Some(val) => match val {
                "%" => 0,
-                _ => val.parse::<usize>(),
+                _ => val.parse::<usize>().unwrap(),
            }
            None => {
                println!("\nErr: not enough args for 'seq'");
@@ -725,7 +711,7 @@ impl Process for Seq {
                len = args.next();
        while let Some(args) = args.next() {
     */
-    fn process(&mut self, voice: &mut Voice) {
+    fn process(&mut self, voice: &mut VoiceState) {
         return;
     }
 }
