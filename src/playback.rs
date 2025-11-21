@@ -555,7 +555,15 @@ impl Conductor {
             }
         };
         let velocity = match args.next() {
-            Some(num) => num.parse::<f32>().unwrap(),
+            Some(num) => {
+                match num.parse::<f32>() {
+                    Some(val) => val,
+                    None {
+                        println!("\nErr: {num} is not a valid argument for velocity");
+                        return;
+                    }
+                }
+            }
             None => {
                 println!("\nErr: not enough arguments for velocity");
                 return;
@@ -711,6 +719,7 @@ impl Process for Seq {
                len = args.next();
        while let Some(args) = args.next() {
     */
+
     fn process(&mut self, voice: &mut VoiceState) {
         return;
     }
