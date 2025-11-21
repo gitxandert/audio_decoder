@@ -10,7 +10,7 @@ use std::{
     ffi::CString,
     io::{self, Read, Write},
     time::{Duration, Instant},
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}},
 };
 
 use crate::decode_helpers::AudioFile;
@@ -86,18 +86,23 @@ pub fn run_gart(tracks: Vec<AudioFile>, sample_rate: u32, num_channels: u32) {
 
                         let mut con = cond_for_repl.lock().unwrap();
                         match cmd {
-                            "start" => con.add_voice(args),
+                            "load" => con.load_voice(args),
+                            "start" => con.start_voice(args),
                             "pause" => con.pause_voice(args),
-                            "resume" => con.resume_voice(args),
-                            "velocity" => con.set_velocity(args),
+                            "loop" => con.loop_voice(args),
                             "stop" => con.stop_voice(args),
+                            "unload" => con.unload_voice(args),
+                            "velocity" => con.set_velocity(args),
                             "q" | "quit" => {
                                 unsafe {
                                     libc::raise(libc::SIGTERM);
                                 }
                                 break;
                             }
-                            _ => println!("Unknown command '{cmd}'"),
+                            _ => {
+                                buf.clear();
+                                println!("\nUnknown command '{}'", cmd);
+                            }
                         }
                         buf.clear();
                     }
@@ -239,7 +244,7 @@ pub fn run_gart(tracks: Vec<AudioFile>, sample_rate: u32, num_channels: u32) {
 
                 // write to DMA buffer
                 let mut con = conductor.lock().unwrap();
-                let written = con.coordinate(areas_ptr, offset, frames);
+                con.coordinate(areas_ptr, offset, frames);
 
                 let committed = snd_pcm_mmap_commit(handle, offset, frames) as i32;
                 if committed < 0 {
@@ -331,12 +336,118 @@ fn read_char() -> u8 {
     buf[0]
 }
 
-// audio engine
+// global clock
+mod clock {
+    use super::*;
 
+    pub static SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    pub fn advance(n: u64) {
+        SAMPLE_COUNTER.fetch_add(n, Ordering::Relaxed);
+    }
+
+    pub fn current() -> u64 {
+        SAMPLE_COUNTER.load(Ordering::Relaxed)
+    }
+}
+
+// tempo control
+// 
+// processes that rely on temporal parameters
+// can be assigned to a TempoGroup or given their own TempoState
+//
+trait TempoGroup: Send {
+    // required for inheritance-like shared fields
+    fn state(&self) -> &TempoState;
+    fn state_mut(&mut self) -> &mut TempoState;
+
+    // impl defined
+    fn update(&mut self, delta_samples: u64);
+
+    // same for all
+    fn current(&self) -> f32 {
+        self.state().current
+    }
+
+    fn change_state(&mut self, current: Option<f32>, interval: Option<f32>) {
+        if let Some(cur) = current {
+            self.state_mut().current = cur;
+        }
+
+        if let Some(int) = interval {
+            self.state_mut().interval = int;
+        }
+    }
+}
+
+struct TempoState {
+    current: f32,
+    interval: f32,
+    sample_rate: f32,
+}
+
+enum TempoUnit {
+    Samples { state: TempoState },
+    MilliSeconds { state: TempoState },
+    Bpm { state: TempoState },
+}
+
+impl TempoUnit {
+    fn new(self) -> Option<Arc<Mutex<dyn TempoGroup + Send>>> {
+        match self {
+            TempoUnit::Samples { state } => Some(Arc::new(Mutex::new(Samples { state } ))),
+            TempoUnit::MilliSeconds { state } => Some(Arc::new(Mutex::new(MilliSeconds { state } ))),
+            TempoUnit::Bpm { state } => Some(Arc::new(Mutex::new(Bpm { state } ))),
+            _ => None,
+        }
+    }
+}
+
+struct Samples {
+    state: TempoState,
+}
+struct MilliSeconds {
+    state: TempoState,
+}
+struct Bpm {
+    state: TempoState,
+}
+
+impl TempoGroup for Samples {
+    fn state(&self) -> &TempoState { &self.state }
+    fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
+
+    fn update(&mut self, delta_samples: u64) {
+        self.state_mut().current += delta_samples as f32;
+    }
+}
+
+impl TempoGroup for MilliSeconds {
+    fn state(&self) -> &TempoState { &self.state }
+    fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
+
+    fn update(&mut self, delta_samples: u64) {
+        self.state_mut().current += (delta_samples as f32) * (1000.0 / self.state().sample_rate);
+    }
+}
+
+impl TempoGroup for Bpm {
+    fn state(&self) -> &TempoState { &self.state }
+    fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
+
+    fn update(&mut self, delta_samples: u64) {
+        let sec = delta_samples as f32 / self.state().sample_rate;
+        self.state_mut().current += sec * (self.state().interval / 60.0);
+    }
+}
+
+// audio engine
+//
 struct Conductor {
     voices: Vec<Voice>,
     out_channels: usize,
-    tracks: Vec<AudioFile>
+    tracks: Vec<AudioFile>,
+    tempo_groups: Vec<Arc<Mutex<dyn TempoGroup + Send>>>,
 }
 
 impl Conductor {
@@ -344,12 +455,12 @@ impl Conductor {
         Self { 
             voices: Vec::<Voice>::new(), 
             out_channels, 
-            tracks
+            tracks,
+            tempo_groups: Vec::<Arc<Mutex<dyn TempoGroup + Send>>>::new(),
         }
     }
 
-    fn coordinate(&mut self, areas_ptr: *const snd_pcm_channel_area_t, offset: snd_pcm_uframes_t, frames: snd_pcm_uframes_t) -> usize {
-        let mut written: usize = 0;
+    fn coordinate(&mut self, areas_ptr: *const snd_pcm_channel_area_t, offset: snd_pcm_uframes_t, frames: snd_pcm_uframes_t) {
         unsafe {
             let areas = std::slice::from_raw_parts(areas_ptr, self.out_channels);
 
@@ -371,22 +482,36 @@ impl Conductor {
                     for voice in &mut self.voices {
                         voice.process(sample_ptr, f, ch);
                     }
-
-                    written += 1;
                 }
+
+                clock::advance(1);
             }
         }
-        written
     }
 
-    fn add_voice(&mut self, name: &str) {
+    fn load_voice(&mut self, name: &str) {
         for track in &self.tracks {
             if track.file_name.as_str() == name {
                 self.voices.push(Voice::new(&track));
                 return;
             }
         }
-        eprintln!("Err: Could not find track '{name}'");
+        println!("\nErr: Could not find track '{name}'");
+    }
+
+    fn start_voice(&mut self, name: &str) {
+        for voice in &mut self.voices {
+            if voice.name == name {
+                voice.active = true;
+                if voice.position > voice.end {
+                    voice.position = 0.0;
+                } else if voice.position < 0.0 {
+                    voice.position = voice.end;
+                }
+                return;
+            }
+        }
+        println!("\nErr: Could not find voice '{name}'");
     }
 
     fn pause_voice(&mut self, name: &str) {
@@ -396,17 +521,43 @@ impl Conductor {
                 return;
             }
         }
-        eprintln!("Err: Could not find voice '{name}'");
+        println!("\nErr: Could not find voice '{name}'");
     }
 
-    fn resume_voice(&mut self, name: &str) {
+    fn loop_voice(&mut self, name: &str) {
         for voice in &mut self.voices {
             if voice.name == name {
-                voice.active = true;
+                voice._loop = true;
                 return;
             }
         }
-        eprintln!("Err: Could not find voice '{name}'");
+        println!("\nErr: Could not find voice '{name}'");
+    }
+
+    fn stop_voice(&mut self, name: &str) {
+        for voice in &mut self.voices {
+            if voice.name == name {
+                voice.active = false;
+                voice.position = match voice.velocity > 0.0 {
+                    true => 0.0,
+                    false => voice.end,
+                };
+                return;
+            }
+        }
+        println!("\nErr: Could not find voice '{name}'");
+    }
+
+    fn unload_voice(&mut self, name: &str) {
+        let mut i = 0;
+        while i < self.voices.len() {
+            if self.voices[i].name == name {
+                self.voices.remove(i);
+                return;
+            }
+            i += 1;
+        }
+        println!("\nErr: Could not find voice '{name}'");
     }
 
     fn set_velocity(&mut self, args: &str) {
@@ -414,20 +565,20 @@ impl Conductor {
         let name = match args.next() {
             Some(string) => string,
             None => {
-                eprintln!("Err: not enough arguments for velocity");
+                println!("\nErr: not enough arguments for velocity");
                 return;
             }
         };
         let velocity = match args.next() {
             Some(num) => num.parse::<f32>().unwrap(),
             None => {
-                eprintln!("Err: not enough arguments for velocity");
+                println!("\nErr: not enough arguments for velocity");
                 return;
             }
         };
         match args.next() {
             Some(extra) => {
-                eprintln!("Err: too many args for velocity");
+                println!("\nErr: too many args for velocity");
                 return;
             }
             None => (),
@@ -438,45 +589,39 @@ impl Conductor {
                 return;
             }
         }
-        eprintln!("Err: Could not find voice '{name}'");
-    }
-
-
-    fn stop_voice(&mut self, name: &str) {
-        let mut i = 0;
-        while i < self.voices.len() {
-            if self.voices[i].name == name {
-                self.voices.remove(i);
-                return;
-            }
-            i += 1;
-        }
-        eprintln!("Err: Could not find voice '{name}'");
+        println!("\nErr: Could not find voice '{name}'");
     }
 }
 
 struct Voice {
     name: String,
     samples: Arc<Vec<i16>>,
+    end: f32,
     sample_rate: u32,
     channels: usize,
     position: f32,
     velocity: f32,  
     gain: f32,
     active: bool,
+    _loop: bool,
+    processes: Vec<Arc<Mutex<dyn Process + Send>>>,
 }
 
 impl Voice {
     fn new(af: &AudioFile) -> Self {
+        let end = (af.samples.len() / af.num_channels as usize) as f32 - 2.0;
         Self {
             name: af.file_name.clone(),
             samples: Arc::new(af.samples.clone()),
+            end: end,
             sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
             position: 0.0,
             velocity: 1.0,
             gain: 1.0, 
-            active: true,
+            active: false,
+            _loop: false,
+            processes: Vec::<Arc<Mutex<dyn Process + Send>>>::new(),
         }
     }
 
@@ -484,12 +629,13 @@ impl Voice {
         if !self.active { return; }
 
         let idx = self.position as usize;
-        if idx + 1 >= self.samples.len() / self.channels || self.position < 0.0 {
-            self.active = false;
+        if idx + 1 >= (self.end + 1.0) as usize || self.position < 0.0 {
+            if !self._loop { self.active = false; }
+
             if self.velocity > 0.0 {
                 self.position = 0.0;
             } else {
-                self.position = (self.samples.len() as f32 / self.channels as f32) - 2.0;
+                self.position = self.end;
             }
             return;
         }
@@ -511,6 +657,12 @@ impl Voice {
             return;
         }
 
+        // processing
+        for p in &self.processes {
+            let mut proc = p.lock().unwrap();
+            proc.process(self);
+        }
+
         // linear interpolation
         let frac = self.position.fract();
         let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
@@ -525,5 +677,55 @@ impl Voice {
         if ch == self.channels - 1 {
             self.position += self.velocity;
         }
+    }
+}
+
+// Processes 
+//
+// processes have to know exactly what to process;
+// they can't just be sent a Voice because they're called from
+// inside of Voice's own functions
+//
+// I need to restructure the Voice's process() function
+// to more adequately accommodate this pipeline
+//
+trait Process: Send {
+    fn process(&mut self, voice: &mut Voice);
+}
+
+struct Seq {
+    len: usize,
+    beatmask: u64, // could make larger eventually; meh
+    offset: isize, // can be negative for indexing from end of len
+    rand: f32,
+}
+
+impl Process for Seq {
+    /*
+    fn new(args: &str) -> Self {
+       let mut args = args.split_whitespace();
+       let mut len: usize = 0;
+       let mut beatmask: u64 = 0;
+       let mut offset: isize = 0;
+
+       let first: usize = match args.next() {
+           Some(val) => match val {
+               "%" => 0,
+                _ => val.parse::<usize>(),
+           }
+           None => {
+               println!("\nErr: not enough args for 'seq'");
+               return;
+           } 
+       };
+
+       match first {
+           "" => {
+               beatmask = 
+               len = args.next();
+       while let Some(args) = args.next() {
+    */
+    fn process(&mut self, voice: &mut Voice) {
+        return;
     }
 }
