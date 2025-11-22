@@ -11,7 +11,7 @@ use std::{
     io::{self, Read, Write},
     time::{Duration, Instant},
     collections::{HashMap, hash_map::Entry},
-    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}},
+    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}},
 };
 
 use crate::decode_helpers::AudioFile;
@@ -21,6 +21,8 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
     
     let conductor = Arc::new(Mutex::new(Conductor::prepare(num_channels as usize, tracks)));
     let cond_for_repl = Arc::clone(&conductor);
+
+    sample_rate::set(sample_rate);
 
     // take over STDIN
     let marker = Arc::new(Mutex::new(0usize));
@@ -350,6 +352,23 @@ mod clock {
     }
 }
 
+// sample_rate
+// (mainly used by TempoState and TempoGroup)
+//
+mod sample_rate {
+    use super::*;
+
+    pub static SAMPLE_RATE: AtomicU32 = AtomicU32::new(0);
+
+    pub fn set(sample_rate: u32) {
+        SAMPLE_RATE.store(sample_rate, Ordering::Relaxed);
+    }
+
+    pub fn get() -> u32 {
+        SAMPLE_RATE.load(Ordering::Relaxed)
+    }
+}
+
 // tempo control
 // 
 // processes that rely on temporal parameters
@@ -383,7 +402,12 @@ struct TempoState {
     init: f32,
     current: f32,
     interval: f32,
-    sample_rate: f32,
+}
+
+impl TempoState {
+    fn new() -> Self {
+        Self { init: 0.0, current: 0.0, interval: 0.0 }
+    }
 }
 
 struct Samples {
@@ -410,7 +434,7 @@ impl TempoGroup for MilliSeconds {
     fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
 
     fn update(&mut self, delta_samples: u64) {
-        self.state_mut().current += (delta_samples as f32) * (1000.0 / self.state().sample_rate);
+        self.state_mut().current += (delta_samples as f32) * (1000.0 / sample_rate::get());
     }
 }
 
@@ -419,7 +443,7 @@ impl TempoGroup for Bpm {
     fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
 
     fn update(&mut self, delta_samples: u64) {
-        let sec = delta_samples as f32 / self.state().sample_rate;
+        let sec = delta_samples as f32 / sample_rate::get();
         self.state_mut().current += sec * (self.state().interval / 60.0);
     }
 }
@@ -597,7 +621,6 @@ struct VoiceState {
 }
 
 struct Voice {
-    name: String,
     samples: Arc<Vec<i16>>,
     end: usize,
     sample_rate: u32,
@@ -617,7 +640,6 @@ impl Voice {
         };
 
         Self {
-            name: af.file_name.clone(),
             samples: Arc::new(af.samples.clone()),
             end,
             sample_rate: af.sample_rate, 
@@ -684,7 +706,6 @@ trait Process: Send {
 }
 
 struct Seq {
-    name: String,
     state: SeqState,
 }
 
@@ -693,30 +714,61 @@ struct SeqState {
     period: usize,
     tempo: TempoState,
     steps: Vec<f32>,
-    rand: Vec<f32>,
+    chance: Vec<f32>,
     jit: Vec<f32>,
 }
 
 impl Seq {
-    fn new(args: &str) -> Self {
-        let name = String::from("seq");
-        let t_state = TempoState {
-            init: 0.0,
-            current: 0.0,
-            interval: 0.0,
-            sample_rate: 48_0000.0,
-        };
+    // Seq args:
+    // -t: tempo
+    // -p: period
+    // -c: chance
+    // -j: jitter
+    // then the pattern
+    // 
+    // if any of the arguments aren't specified,
+    // defaults are instantiated
+    //
+    // if a pattern isn't specified, Seq errs
+    //
+    fn new(args: &str) -> Arc<Mutex<Self>> {
+        let mut args = args.split_whitespace();
+        let mut period: usize = 0;
+        let mut tempo: TempoState = TempoState::new();
+        let mut chance: Vec<f32> = Vec::new();
+        let mut jit: Vec<f32> = Vec::new();
+        
+        loop {
+            if let Some(arg) = args.next() {
+                match arg {
+                    "-t" | "--tempo" => {
+                    }
+                    "-p" | "--period" => {
+                    }
+                    "-c" | "--chance" => {
+                    }
+                    "-j" | "--jitter" => {
+                    }
+                    _ => break, // ran out of args, or is invalid
+                }
+            } else {
+                println!("\nErr: pattern not specified for Seq");
+                return;
+            }
+        }
+
+        let mut steps: Vec<32> = Vec::new();
 
         let state = SeqState {
             active: false,
-            period: 16,
-            tempo: t_state,
-            steps: Vec::<f32>::new(),
-            rand: Vec::<f32>::new(),
-            jit: Vec::<f32>::new(),
-        };
+            period,
+            tempo,
+            steps,
+            chance,
+            jit,
+        }
 
-        Self { name, state }
+        Self { state }
     }
 }
 
