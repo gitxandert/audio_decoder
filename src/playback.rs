@@ -400,8 +400,8 @@ mod gart_time {
     }
 
     enum TempoMode {
-        Group,
         Solo,
+        Group,
     }
 
     enum TempoUnit {
@@ -411,15 +411,21 @@ mod gart_time {
     }
 
     pub impl TempoState {
-        pub fn new(mode: TempoMode, unit: TempoUnit, interval: f32) -> Self {
-            let interval_in_samps = convert_interval(&unit, interval);
-            Self { 
-                mode, 
-                unit, 
-                interval: interval_in_samps, 
-                active: AtomicBool::new(0.0), 
-                current: AtomicF32::new(0.0) 
+        pub fn new() -> Self {
+            Self {
+                mode: TempoMode::Solo,
+                unit: TempoUnit::Samples,
+                interval: sample_rate::get(),
+                active: AtomicBool::new(false),
+                current: AtomicF32::new(0.0),
             }
+        }
+
+        pub fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) -> Self {
+            let interval_in_samps = convert_interval(&unit, interval);
+            self.mode = mode;
+            self.unit = unit; 
+            self.interval = interval_in_samps;
         }
 
         pub fn update(&mut self, delta_in_samples: f64) -> Self {
@@ -589,6 +595,14 @@ impl Conductor {
             }
         };
         let name = name.to_string();
+        
+        let voice = match self.voices.get_mut(&name) {
+            Some(v) => v,
+            None => {
+                println!("\nErr: Could not find voice '{name}'");
+                return;
+            }
+        };
 
         let velocity = match args.next() {
             Some(num) => {
@@ -605,17 +619,149 @@ impl Conductor {
                 return;
             }
         };
+
         match args.next() {
             Some(extra) => {
                 println!("\nErr: too many args for velocity");
                 return;
             }
-            None => (),
+            None => voice.state.velocity = velocity,
         }        
-        match self.voices.get_mut(&name) {
-            Some(voice) => voice.state.velocity = velocity,
-            None => println!("\nErr: Could not find voice '{name}'"),
+    }
+
+    fn seq(&mut self, args: &str) {
+        let mut args = args.split_whitespace();
+        let name = match args.next() {
+            Some(string) => string,
+            None => {
+                println!("\nErr: not enough arguments for velocity");
+                return;
+            }
+        };
+        let name = name.to_string();
+
+        let voice = match self.voices.get_mut(&name) {
+            Some(v) => v,
+            None => {
+                println!("\nErr: Could not find voice '{name}'");
+                return;
+            }
+        };
+
+        let mut period: usize = sample_rate::get();
+        let mut tempo: Arc<TempoState> = Arc::new(TempoState::new());
+        let mut steps: Vec<f32> = Vec::new();
+        let mut chance: Vec<f32> = Vec::new();
+        let mut jit: Vec<f32> = Vec::new();
+        
+        while let Some(arg) = args.next() {
+            match arg {
+                "-t" | "--tempo" => {
+                    let t_arg = match args.next() {
+                        Some(arg) => arg,
+                        None => {
+                            println!("\nErr: not enough arguments for seq");
+                            return;
+                        }
+                    };
+
+                    let u = t_arg.chars().next().unwrap();
+
+                    if u == 'g' {
+                        let tg_name = String::from(&t_arg[1..]);
+                        tempo = match self.tempo_groups.get(&tg_name) {
+                            Some(group) => {
+                                Arc::clone(group);
+                                continue;
+                            }
+                            None => {
+                                println!("\nErr: no TempoGroup with the provided name");
+                                return;
+                            }
+                        };
+                    }
+
+                    tempo.interval = match &t_arg[1..].parse::<f32>() {
+                        Ok(val) => val,
+                        Err(_) => {
+                            println!("\nErr: invalid tempo interval");
+                            return;
+                        }
+                    };
+
+                    tempo.unit = match u {
+                        "s" => TempoUnit::Samples,
+                        "m" => TempoUnit::Millis,
+                        "b" => TempoUnit::Bpm,
+                        _ => {
+                            println!("\nErr: unrecognized time unit for tempo");
+                            return;
+                        }
+                    }
+
+                    self.tempo_solos.push(Arc::clone(&tempo));
+                }
+                "-p" | "--period" => {
+                    period = match args.next() {
+                        Some(arg) => match arg.parse::<f32>() {
+                            Some(val) => val,
+                            None => {
+                                println!("\nErr: invalid argument for period");
+                                return;
+                            }
+                        }
+                        None => {
+                            println!("\nErr: not enough arguments for seq");
+                            return;
+                        }
+                    };
+                }
+                "-s" | "--steps" => {
+                    while let Some(val) = args.next() {
+                        match val.parse::<f32>() {
+                            Some(valid) => steps.push(valid),
+                            None {
+                                println!("\nErr: invalid step argument");
+                                return;
+                            }
+                        }
+                    }
+                }
+                "-c" | "--chance" => {
+                    // a value specifies chance for the step
+                    //+ at the same index as the value
+                    // _ is shorthand for 100
+                    // n,val specifies chance=val for step=n
+                    // a,val sets the same chance=val for all steps
+                    // n1-n2,val specifies a chance=val for
+                    //+ n1-n2 contiguous steps
+                }
+                "-j" | "--jitter" => {
+                    // a value specifies jitter for the step
+                    //+ at the same index as the value
+                    // _ means no jitter
+                    // e|l indicates jitter before=e and after=l the beat
+                    //+ (of ranges e-0.0 and 0.0-l)
+                    // e1-e2|l1-l2 indicate jitter ranges
+                    // n,e|l specifies jitter=e|l for step=n
+                    // a,e|l specifies jitter=e|l for all steps
+                    // n1-n2,e1-2|l1-l2 specifies jitter ranges for
+                    //+ n1-n2 contiguous steps
+                }
+                _ => break,
+            }
+        } 
+
+        let state = SeqState {
+            active: false,
+            period,
+            tempo,
+            steps,
+            chance,
+            jit,
         }
+
+        self.voices.push(Seq::new(state));
     }
 }
 
@@ -744,55 +890,7 @@ impl Seq {
     // refers to a voice, to which to add the Process
     //
     fn new(args: &str) -> Arc<Mutex<Self>> {
-        let mut args = args.split_whitespace();
-        let mut period: usize = 0;
-        let mut tempo: TempoState = TempoState::new();
-        let mut chance: Vec<f32> = Vec::new();
-        let mut jit: Vec<f32> = Vec::new();
-        
-        loop {
-            if let Some(arg) = args.next() {
-                match arg {
-                    "-t" | "--tempo" => {
-                        let t_args = args.next();
-                        match &t_arg[0] {
-                            "b" => {}
-                            "m" => {}
-                            "s" => {}
-                            "g" => {}
-                            _ => {
-                                println!("\nSeq Error: unrecognized time unit for tempo");
-                                return;
-                            }
-                        }
-                    }
-                    "-p" | "--period" => {
-                    }
-                    "-c" | "--chance" => {
-                    }
-                    "-j" | "--jitter" => {
-                    }
-                    _ => break, // ran out of args, or is invalid
-                }
-            } else {
-                // returns None = end of string, no pattern specified
-                println!("\nErr: pattern not specified for Seq");
-                return;
-            }
-        }
-
-        let mut steps: Vec<f32> = Vec::new();
-
-        let state = SeqState {
-            active: false,
-            period,
-            tempo,
-            steps,
-            chance,
-            jit,
-        }
-
-        Self { state }
+        Arc<Mutex<Self { state }>>
     }
 }
 
