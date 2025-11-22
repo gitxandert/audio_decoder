@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
     collections::{HashMap, hash_map::Entry},
     sync::{Arc, Mutex, 
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Atomicf32, Ordering}
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}
     },
 };
 
@@ -96,6 +96,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                             "stop" => con.stop_voice(args),
                             "unload" => con.unload_voice(args),
                             "velocity" => con.set_velocity(args),
+                            "seq" => con.seq(args),
                             "q" | "quit" => {
                                 unsafe {
                                     libc::raise(libc::SIGTERM);
@@ -154,7 +155,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
             "snd_pcm_open",
         );
 
-        // config hardward
+        // config hardware
         let mut hw: *mut snd_pcm_hw_params_t = ptr::null_mut();
         snd_pcm_hw_params_malloc(&mut hw);
         snd_pcm_hw_params_any(handle, hw);
@@ -392,53 +393,60 @@ mod gart_time {
     // samples, milliseconds, or BPM, depending on initialization
     //
     pub struct TempoState {
-        mode: TempoMode,
-        unit: TempoUnit,
-        interval: f32,
-        active: AtomicBool,
-        current: Atomicf32,
+        pub mode: TempoMode,
+        pub unit: TempoUnit,
+        pub interval: f32,
+        pub active: AtomicBool,
+        pub current: AtomicU32,
     }
 
-    enum TempoMode {
+    pub enum TempoMode {
         Solo,
         Group,
     }
 
-    enum TempoUnit {
+    pub enum TempoUnit {
         Samples,
         Millis,
         Bpm,
     }
 
-    pub impl TempoState {
+    impl TempoState {
         pub fn new() -> Self {
             Self {
                 mode: TempoMode::Solo,
                 unit: TempoUnit::Samples,
-                interval: sample_rate::get(),
+                interval: sample_rate::get() as f32,
                 active: AtomicBool::new(false),
-                current: AtomicF32::new(0.0),
+                current: AtomicU32::new(0),
             }
         }
 
-        pub fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) -> Self {
+        pub fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) {
             let interval_in_samps = convert_interval(&unit, interval);
             self.mode = mode;
             self.unit = unit; 
             self.interval = interval_in_samps;
         }
 
-        pub fn update(&mut self, delta_in_samples: f64) -> Self {
-            let step = delta_in_samples as f32 / self.interval;
-            self.current.fetch_add(delta_in_samples, Ordering::Relaxed);
+        // store current as AtomicU32, preserving three degrees
+        // of float data by multiplying by 1000.0
+        pub fn update(&mut self, delta_in_samples: f64) {
+            let step_f = delta_in_samples as f32 / self.interval;
+            let step_u = (step_f * 1000.0) as u32;
+            self.current.fetch_add(step_u, Ordering::Relaxed);
         }
 
+        // return current as f32, restoring three degrees
+        // of float precision by dividing by 1000.0
         pub fn current(&self) -> f32 {
-            self.current.load(Ordering::Relaxed)
+            let step_u = self.current.load(Ordering::Relaxed);
+            let step_f = step_u as f32 / 1000.0;
+            step_f
         }
 
         pub fn reset(&mut self) {
-            self.current.store(0.0, Ordering::Relaxed);
+            self.current.store(0, Ordering::Relaxed);
         }
 
         pub fn set_interval(&mut self, new_interval: f32) {
@@ -447,7 +455,7 @@ mod gart_time {
         }
     }
 
-    pub fn convert_interval(unit: &TempoUnit, interval: f32) -> f32 {
+    fn convert_interval(unit: &TempoUnit, interval: f32) -> f32 {
         let frac = match unit {
             TempoUnit::Samples => return interval,
             TempoUnit::Millis => interval / 1000.0,
@@ -460,14 +468,16 @@ mod gart_time {
     }
 }
 
+use gart_time::{clock, TempoState, TempoMode, TempoUnit};
+
 // audio engine
 //
 struct Conductor {
     voices: HashMap<String, Voice>,
     out_channels: usize,
     tracks: HashMap<String, AudioFile>,
-    tempo_groups: HashMap<String, Arc<TempoState>,
-    tempo_solos: Vec<Arc<TempoState>>,
+    tempo_groups: HashMap<String, Arc<Mutex<TempoState>>>,
+    tempo_solos: Vec<Arc<Mutex<TempoState>>>,
 }
 
 impl Conductor {
@@ -476,6 +486,8 @@ impl Conductor {
             voices: HashMap::<String, Voice>::new(), 
             out_channels, 
             tracks,
+            tempo_groups: HashMap::<String, Arc<Mutex<TempoState>>>::new(),
+            tempo_solos: Vec::<Arc<Mutex<TempoState>>>::new(),
         }
     }
 
@@ -648,8 +660,8 @@ impl Conductor {
             }
         };
 
-        let mut period: usize = sample_rate::get();
-        let mut tempo: Arc<TempoState> = Arc::new(TempoState::new());
+        let mut period: usize = sample_rate::get() as usize;
+        let mut tempo: Arc<Mutex<TempoState>> = Arc::new(Mutex::new(TempoState::new()));
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
@@ -680,32 +692,36 @@ impl Conductor {
                             }
                         };
                     }
+                    
+                    let mut t = tempo.lock().unwrap();
 
-                    tempo.interval = match &t_arg[1..].parse::<f32>() {
-                        Ok(val) => val,
+                    t.interval = match &t_arg[1..].parse::<f32>() {
+                        Ok(val) => *val,
                         Err(_) => {
                             println!("\nErr: invalid tempo interval");
                             return;
                         }
                     };
 
-                    tempo.unit = match u {
-                        "s" => TempoUnit::Samples,
-                        "m" => TempoUnit::Millis,
-                        "b" => TempoUnit::Bpm,
+                    t.unit = match u {
+                        's' => TempoUnit::Samples,
+                        'm' => TempoUnit::Millis,
+                        'b' => TempoUnit::Bpm,
                         _ => {
                             println!("\nErr: unrecognized time unit for tempo");
                             return;
                         }
-                    }
+                    };
+
+                    drop(t);
 
                     self.tempo_solos.push(Arc::clone(&tempo));
                 }
                 "-p" | "--period" => {
                     period = match args.next() {
                         Some(arg) => match arg.parse::<f32>() {
-                            Some(val) => val,
-                            None => {
+                            Ok(val) => val as usize,
+                            Err(_) => {
                                 println!("\nErr: invalid argument for period");
                                 return;
                             }
@@ -717,10 +733,12 @@ impl Conductor {
                     };
                 }
                 "-s" | "--steps" => {
+                    // need to figure out how to parse numbers
+                    // until next char
                     while let Some(val) = args.next() {
                         match val.parse::<f32>() {
-                            Some(valid) => steps.push(valid),
-                            None {
+                            Ok(valid) => steps.push(valid),
+                            Err(_) => {
                                 println!("\nErr: invalid step argument");
                                 return;
                             }
@@ -759,9 +777,10 @@ impl Conductor {
             steps,
             chance,
             jit,
-        }
+        };
 
-        self.voices.push(Seq::new(state));
+        voice.processes.insert("seq".to_string(), 
+            Arc::new(Mutex::new(Seq { state })));
     }
 }
 
@@ -864,34 +883,10 @@ struct Seq {
 struct SeqState {
     active: bool,
     period: usize,
-    tempo: TempoGroup,
+    tempo: Arc<Mutex<TempoState>>,
     steps: Vec<f32>,
     chance: Vec<f32>,
     jit: Vec<f32>,
-}
-
-impl Seq {
-    // Seq args:
-    // -t: tempo
-    // -p: period
-    // -c: chance
-    // -j: jitter
-    // then the pattern
-    // 
-    // if any of the arguments aren't specified,
-    // defaults are instantiated
-    //
-    // if a pattern isn't specified, Seq errs
-    // 
-    // TODO: move all of the following to a Conductor function,
-    // so that TempoStates can be created, stored in the Conductor,
-    // and referenced by the Process
-    // TODO: in the Conductor function, make sure the second argument
-    // refers to a voice, to which to add the Process
-    //
-    fn new(args: &str) -> Arc<Mutex<Self>> {
-        Arc<Mutex<Self { state }>>
-    }
 }
 
 impl Process for Seq {
