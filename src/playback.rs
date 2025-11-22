@@ -11,7 +11,9 @@ use std::{
     io::{self, Read, Write},
     time::{Duration, Instant},
     collections::{HashMap, hash_map::Entry},
-    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}},
+    sync::{Arc, Mutex, 
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Atomicf32, Ordering}
+    },
 };
 
 use crate::decode_helpers::AudioFile;
@@ -337,20 +339,7 @@ fn read_char() -> u8 {
     buf[0]
 }
 
-// global clock
-mod clock {
-    use super::*;
 
-    pub static SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    pub fn advance(n: u64) {
-        SAMPLE_COUNTER.fetch_add(n, Ordering::Relaxed);
-    }
-
-    pub fn current() -> u64 {
-        SAMPLE_COUNTER.load(Ordering::Relaxed)
-    }
-}
 
 // sample_rate
 // (mainly used by TempoState and TempoGroup)
@@ -369,82 +358,99 @@ mod sample_rate {
     }
 }
 
-// tempo control
-// 
-// processes that rely on temporal parameters
-// can be assigned to a TempoGroup or given their own TempoState
-//
-trait TempoGroup: Send {
-    // required for inheritance-like shared fields
-    fn state(&self) -> &TempoState;
-    fn state_mut(&mut self) -> &mut TempoState;
+mod gart_time {
+    use super::*;
 
-    // impl defined
-    fn update(&mut self, delta_samples: u64);
+    // global clock
+    pub mod clock {
+        use super::*;
 
-    // same for all
-    fn current(&mut self) -> f32 {
-        let delta = clock::current() - self.state().init as u64;
-        self.update(delta);
-        self.state().current
+        pub static SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        pub fn advance(n: u64) {
+            SAMPLE_COUNTER.fetch_add(n, Ordering::Relaxed);
+        }
+
+        pub fn current() -> u64 {
+            SAMPLE_COUNTER.load(Ordering::Relaxed)
+        }
+    }
+    // tempo control
+    // 
+    // processes that rely on temporal parameters
+    // can be assigned to a TempoGroup to synchronize with others
+    // or to a TempoSolo to be in their own little time world
+    //
+    // a TempoGroups is created by a special command (TBD);
+    // a TempoSolo is created along with the Process that requires it
+    //
+    // a TempoGroup has a name that can be assigned to a Process
+    //
+    // all TempoStates are updated by the Conductor
+    //
+    // interval is stored as samples, but converted from
+    // samples, milliseconds, or BPM, depending on initialization
+    //
+    pub struct TempoState {
+        mode: TempoMode,
+        unit: TempoUnit,
+        interval: f32,
+        active: AtomicBool,
+        current: Atomicf32,
     }
 
-    fn reset(&mut self) {
-        self.state_mut().init = clock::current() as f32;
+    enum TempoMode {
+        Group,
+        Solo,
     }
 
-    fn change_interval(&mut self, interval: f32) {
-        self.state_mut().interval = interval;
+    enum TempoUnit {
+        Samples,
+        Millis,
+        Bpm,
     }
-}
 
-struct TempoState {
-    init: f32,
-    current: f32,
-    interval: f32,
-}
+    pub impl TempoState {
+        pub fn new(mode: TempoMode, unit: TempoUnit, interval: f32) -> Self {
+            let interval_in_samps = convert_interval(&unit, interval);
+            Self { 
+                mode, 
+                unit, 
+                interval: interval_in_samps, 
+                active: AtomicBool::new(0.0), 
+                current: AtomicF32::new(0.0) 
+            }
+        }
 
-impl TempoState {
-    fn new() -> Self {
-        Self { init: 0.0, current: 0.0, interval: 0.0 }
+        pub fn update(&mut self, delta_in_samples: f64) -> Self {
+            let step = delta_in_samples as f32 / self.interval;
+            self.current.fetch_add(delta_in_samples, Ordering::Relaxed);
+        }
+
+        pub fn current(&self) -> f32 {
+            self.current.load(Ordering::Relaxed)
+        }
+
+        pub fn reset(&mut self) {
+            self.current.store(0.0, Ordering::Relaxed);
+        }
+
+        pub fn set_interval(&mut self, new_interval: f32) {
+            let new_interval_in_samps = convert_interval(&self.unit, new_interval);
+            self.interval = new_interval_in_samps;
+        }
     }
-}
 
-struct Samples {
-    state: TempoState,
-}
-struct MilliSeconds {
-    state: TempoState,
-}
-struct Bpm {
-    state: TempoState,
-}
-
-impl TempoGroup for Samples {
-    fn state(&self) -> &TempoState { &self.state }
-    fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
-
-    fn update(&mut self, delta_samples: u64) {
-        self.state_mut().current += delta_samples as f32;
-    }
-}
-
-impl TempoGroup for MilliSeconds {
-    fn state(&self) -> &TempoState { &self.state }
-    fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
-
-    fn update(&mut self, delta_samples: u64) {
-        self.state_mut().current += (delta_samples as f32) * (1000.0 / sample_rate::get());
-    }
-}
-
-impl TempoGroup for Bpm {
-    fn state(&self) -> &TempoState { &self.state }
-    fn state_mut(&mut self) -> &mut TempoState { &mut self.state }
-
-    fn update(&mut self, delta_samples: u64) {
-        let sec = delta_samples as f32 / sample_rate::get();
-        self.state_mut().current += sec * (self.state().interval / 60.0);
+    pub fn convert_interval(unit: &TempoUnit, interval: f32) -> f32 {
+        let frac = match unit {
+            TempoUnit::Samples => return interval,
+            TempoUnit::Millis => interval / 1000.0,
+            TempoUnit::Bpm => 60.0 / interval,
+        };
+        
+        let interval_in_samples = sample_rate::get() as f32 * frac;
+       
+        interval_in_samples
     }
 }
 
@@ -454,7 +460,8 @@ struct Conductor {
     voices: HashMap<String, Voice>,
     out_channels: usize,
     tracks: HashMap<String, AudioFile>,
-    tempo_groups: HashMap<String, Arc<Mutex<dyn TempoGroup>>>,
+    tempo_groups: HashMap<String, Arc<TempoState>,
+    tempo_solos: Vec<Arc<TempoState>>,
 }
 
 impl Conductor {
@@ -463,7 +470,6 @@ impl Conductor {
             voices: HashMap::<String, Voice>::new(), 
             out_channels, 
             tracks,
-            tempo_groups: HashMap::<String, Arc<Mutex<dyn TempoGroup>>>::new(),
         }
     }
 
@@ -712,7 +718,7 @@ struct Seq {
 struct SeqState {
     active: bool,
     period: usize,
-    tempo: TempoState,
+    tempo: TempoGroup,
     steps: Vec<f32>,
     chance: Vec<f32>,
     jit: Vec<f32>,
@@ -730,6 +736,12 @@ impl Seq {
     // defaults are instantiated
     //
     // if a pattern isn't specified, Seq errs
+    // 
+    // TODO: move all of the following to a Conductor function,
+    // so that TempoStates can be created, stored in the Conductor,
+    // and referenced by the Process
+    // TODO: in the Conductor function, make sure the second argument
+    // refers to a voice, to which to add the Process
     //
     fn new(args: &str) -> Arc<Mutex<Self>> {
         let mut args = args.split_whitespace();
@@ -742,6 +754,17 @@ impl Seq {
             if let Some(arg) = args.next() {
                 match arg {
                     "-t" | "--tempo" => {
+                        let t_args = args.next();
+                        match &t_arg[0] {
+                            "b" => {}
+                            "m" => {}
+                            "s" => {}
+                            "g" => {}
+                            _ => {
+                                println!("\nSeq Error: unrecognized time unit for tempo");
+                                return;
+                            }
+                        }
                     }
                     "-p" | "--period" => {
                     }
@@ -752,12 +775,13 @@ impl Seq {
                     _ => break, // ran out of args, or is invalid
                 }
             } else {
+                // returns None = end of string, no pattern specified
                 println!("\nErr: pattern not specified for Seq");
                 return;
             }
         }
 
-        let mut steps: Vec<32> = Vec::new();
+        let mut steps: Vec<f32> = Vec::new();
 
         let state = SeqState {
             active: false,
