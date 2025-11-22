@@ -396,6 +396,7 @@ mod gart_time {
     pub struct TempoState {
         pub mode: TempoMode,
         pub unit: TempoUnit,
+        pub init: f64,
         pub interval: f32,
         pub active: AtomicBool,
         pub current: AtomicU32,
@@ -419,6 +420,7 @@ mod gart_time {
             Self {
                 mode: TempoMode::Solo,
                 unit: TempoUnit::Samples,
+                init: 0.0,
                 interval: sample_rate::get() as f32,
                 active: AtomicBool::new(true),
                 current: AtomicU32::new(0),
@@ -427,6 +429,7 @@ mod gart_time {
 
         pub fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) {
             let interval_in_samps = convert_interval(&unit, interval);
+            self.init = clock::current();
             self.mode = mode;
             self.unit = unit; 
             self.interval = interval_in_samps;
@@ -434,7 +437,7 @@ mod gart_time {
 
         // store current as AtomicU32, preserving three degrees
         // of float data by multiplying by 1000.0
-        pub fn update(&mut self, delta_in_samples: f64) {
+        fn update(&mut self, delta_in_samples: f64) {
             let step_f = delta_in_samples as f32 / self.interval;
             let step_u = (step_f * 1000.0) as u32;
             self.current.fetch_add(step_u, Ordering::Relaxed);
@@ -443,12 +446,15 @@ mod gart_time {
         // return current as f32, restoring three degrees
         // of float precision by dividing by 1000.0
         pub fn current(&self) -> f32 {
+            let delta = clock::current() - self.init;
+            self.update(delta);
             let step_u = self.current.load(Ordering::Relaxed);
             let step_f = step_u as f32 / 1000.0;
             step_f
         }
 
         pub fn reset(&mut self) {
+            self.init = clock::current();
             self.current.store(0, Ordering::Relaxed);
         }
 
@@ -480,7 +486,6 @@ struct Conductor {
     out_channels: usize,
     tracks: HashMap<String, AudioFile>,
     tempo_groups: HashMap<String, Arc<Mutex<TempoState>>>,
-    tempo_solos: Vec<Arc<Mutex<TempoState>>>,
 }
 
 impl Conductor {
@@ -490,7 +495,6 @@ impl Conductor {
             out_channels, 
             tracks,
             tempo_groups: HashMap::<String, Arc<Mutex<TempoState>>>::new(),
-            tempo_solos: Vec::<Arc<Mutex<TempoState>>>::new(),
         }
     }
 
@@ -513,11 +517,6 @@ impl Conductor {
                         *sample_ptr = 0;
                     }
                     
-                    for ts in &self.tempo_solos {
-                        let mut solo = ts.lock().unwrap();
-                        solo.update(1.0);
-                    }
-
                     for (_, voice) in &mut self.voices {
                         voice.process(sample_ptr, f, ch);
                     }
@@ -725,7 +724,7 @@ impl Conductor {
 
                     drop(t);
 
-                    self.tempo_solos.push(Arc::clone(&tempo));
+                    voice.tempo_solos.push(Arc::clone(&tempo));
                 }
                 "-p" | "--period" => {
                     period = match args.next() {
@@ -812,6 +811,7 @@ struct Voice {
     channels: usize,
     state: VoiceState,  
     processes: HashMap<String, Arc<Mutex<dyn Process>>>,
+    tempo_solos: Vec<Arc<Mutex<TempoState>>>,
 }
 
 impl Voice {
@@ -831,6 +831,7 @@ impl Voice {
             channels: af.num_channels as usize, 
             state,
             processes: HashMap::<String, Arc<Mutex<dyn Process>>>::new(),
+            tempo_solos: Vec::<Arc<Mutex<TempoState>>>::new(),
         }
     }
 
