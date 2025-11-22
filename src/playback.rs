@@ -392,6 +392,7 @@ mod gart_time {
     // interval is stored as samples, but converted from
     // samples, milliseconds, or BPM, depending on initialization
     //
+    #[derive(Debug)]
     pub struct TempoState {
         pub mode: TempoMode,
         pub unit: TempoUnit,
@@ -400,11 +401,13 @@ mod gart_time {
         pub current: AtomicU32,
     }
 
+    #[derive(Debug)]
     pub enum TempoMode {
         Solo,
         Group,
     }
 
+    #[derive(Debug)]
     pub enum TempoUnit {
         Samples,
         Millis,
@@ -417,7 +420,7 @@ mod gart_time {
                 mode: TempoMode::Solo,
                 unit: TempoUnit::Samples,
                 interval: sample_rate::get() as f32,
-                active: AtomicBool::new(false),
+                active: AtomicBool::new(true),
                 current: AtomicU32::new(0),
             }
         }
@@ -509,6 +512,11 @@ impl Conductor {
                     unsafe {
                         *sample_ptr = 0;
                     }
+                    
+                    for ts in &self.tempo_solos {
+                        let mut solo = ts.lock().unwrap();
+                        solo.update(1.0);
+                    }
 
                     for (_, voice) in &mut self.voices {
                         voice.process(sample_ptr, f, ch);
@@ -541,7 +549,7 @@ impl Conductor {
             Some(voice) => {
                 let state = &mut voice.state;
                 state.active = true;
-                if state.position > voice.end as f32 {
+                if state.position >= voice.end as f32 {
                     state.position = 0.0;
                 } else if state.position < 0.0 {
                     state.position = voice.end as f32;
@@ -695,15 +703,7 @@ impl Conductor {
                     
                     let mut t = tempo.lock().unwrap();
 
-                    t.interval = match &t_arg[1..].parse::<f32>() {
-                        Ok(val) => *val,
-                        Err(_) => {
-                            println!("\nErr: invalid tempo interval");
-                            return;
-                        }
-                    };
-
-                    t.unit = match u {
+                    let unit = match u {
                         's' => TempoUnit::Samples,
                         'm' => TempoUnit::Millis,
                         'b' => TempoUnit::Bpm,
@@ -712,6 +712,16 @@ impl Conductor {
                             return;
                         }
                     };
+
+                    let interval = match &t_arg[1..].parse::<f32>() {
+                        Ok(val) => *val,
+                        Err(_) => {
+                            println!("\nErr: invalid tempo interval");
+                            return;
+                        }
+                    };
+
+                    t.init(TempoMode::Solo, unit, interval);
 
                     drop(t);
 
@@ -735,12 +745,15 @@ impl Conductor {
                 "-s" | "--steps" => {
                     // need to figure out how to parse numbers
                     // until next char
-                    while let Some(val) = args.next() {
+                    while let Some(val) = &args.clone().peekable().peek() {
                         match val.parse::<f32>() {
-                            Ok(valid) => steps.push(valid),
+                            Ok(valid) => {
+                                let num = args.next().unwrap();
+                                let num = num.parse::<f32>().unwrap();
+                                steps.push(num);
+                            }
                             Err(_) => {
-                                println!("\nErr: invalid step argument");
-                                return;
+                                continue;
                             }
                         }
                     }
@@ -771,12 +784,13 @@ impl Conductor {
         } 
 
         let state = SeqState {
-            active: false,
+            active: true,
             period,
             tempo,
             steps,
             chance,
             jit,
+            seq_idx: 0,
         };
 
         voice.processes.insert("seq".to_string(), 
@@ -887,10 +901,23 @@ struct SeqState {
     steps: Vec<f32>,
     chance: Vec<f32>,
     jit: Vec<f32>,
+    seq_idx: usize,
 }
 
 impl Process for Seq {
     fn process(&mut self, voice: &mut VoiceState) {
-        return;
+        if !self.state.active { return; }
+
+        let tempo = self.state.tempo.lock().unwrap();
+
+        if !tempo.active.load(Ordering::Relaxed) { return; }
+
+        let current = tempo.current() % self.state.period as f32;
+
+        println!("{current}");
+        if current > self.state.steps[self.state.seq_idx] {
+            voice.position = 0.0;
+            self.state.seq_idx = (self.state.seq_idx + 1) % self.state.steps.len();
+        }
     }
 }
