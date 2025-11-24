@@ -396,7 +396,6 @@ mod gart_time {
     pub struct TempoState {
         pub mode: TempoMode,
         pub unit: TempoUnit,
-        pub init: f64,
         pub interval: f32,
         pub active: AtomicBool,
         pub current: AtomicU32,
@@ -420,16 +419,14 @@ mod gart_time {
             Self {
                 mode: TempoMode::Solo,
                 unit: TempoUnit::Samples,
-                init: 0.0,
                 interval: sample_rate::get() as f32,
-                active: AtomicBool::new(true),
+                active: AtomicBool::new(false),
                 current: AtomicU32::new(0),
             }
         }
 
         pub fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) {
             let interval_in_samps = convert_interval(&unit, interval);
-            self.init = clock::current();
             self.mode = mode;
             self.unit = unit; 
             self.interval = interval_in_samps;
@@ -437,7 +434,7 @@ mod gart_time {
 
         // store current as AtomicU32, preserving three degrees
         // of float data by multiplying by 1000.0
-        fn update(&mut self, delta_in_samples: f64) {
+        pub fn update(&mut self, delta_in_samples: f64) {
             let step_f = delta_in_samples as f32 / self.interval;
             let step_u = (step_f * 1000.0) as u32;
             self.current.fetch_add(step_u, Ordering::Relaxed);
@@ -446,15 +443,12 @@ mod gart_time {
         // return current as f32, restoring three degrees
         // of float precision by dividing by 1000.0
         pub fn current(&self) -> f32 {
-            let delta = clock::current() - self.init;
-            self.update(delta);
             let step_u = self.current.load(Ordering::Relaxed);
             let step_f = step_u as f32 / 1000.0;
             step_f
         }
 
         pub fn reset(&mut self) {
-            self.init = clock::current();
             self.current.store(0, Ordering::Relaxed);
         }
 
@@ -516,6 +510,13 @@ impl Conductor {
                     unsafe {
                         *sample_ptr = 0;
                     }
+
+                    for (_, tempo_group) in &self.tempo_groups {
+                        let mut tg = tempo_group.lock().unwrap();
+                        if tg.active.load(Ordering::Relaxed) {
+                            tg.update(1.0);
+                        }
+                    }
                     
                     for (_, voice) in &mut self.voices {
                         voice.process(sample_ptr, f, ch);
@@ -547,12 +548,18 @@ impl Conductor {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
-                state.active = true;
-                if state.position >= voice.end as f32 {
-                    state.position = 0.0;
-                } else if state.position < 0.0 {
-                    state.position = voice.end as f32;
+                state.active.store(true, Ordering::Relaxed);
+                
+                for tempo_solo in &voice.tempo_solos {
+                    let mut ts = tempo_solo.lock().unwrap();
+                    ts.active.store(true, Ordering::Relaxed);
+                    ts.reset();
                 }
+
+                state.position = match state.velocity >= 0.0 {
+                    true => 0.0,
+                    false => state.end as f32,
+                };
             }
             None => println!("\nErr: Could not find voice '{name}'"),
         }
@@ -561,7 +568,28 @@ impl Conductor {
     fn pause_voice(&mut self, name: &str) {
         let name = name.to_string();
         match self.voices.get_mut(&name) {
-            Some(voice) => voice.state.active = false,
+            Some(voice) => {
+                voice.state.active.store(false, Ordering::Relaxed);;
+                for tempo_solo in &voice.tempo_solos {
+                    let ts = tempo_solo.lock().unwrap();
+                    ts.active.store(false, Ordering::Relaxed);
+                }
+            }
+            None => println!("\nErr: Could not find voice '{name}'"),
+        }
+    }
+
+    fn resume_voice(&mut self, name: &str) {
+        let name = name.to_string();
+        match self.voices.get_mut(&name) {
+            Some(voice) => {
+                let state = &mut voice.state;
+                state.active.store(true, Ordering::Relaxed);
+                for tempo_solo in &voice.tempo_solos {
+                    let ts = tempo_solo.lock().unwrap();
+                    ts.active.store(true, Ordering::Relaxed);
+                }
+            }
             None => println!("\nErr: Could not find voice '{name}'"),
         }
     }
@@ -583,10 +611,16 @@ impl Conductor {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
-                state.active = false;
+                state.active.store(false, Ordering::Relaxed);
+
+                for tempo_solo in &voice.tempo_solos {
+                    let ts = tempo_solo.lock().unwrap();
+                    ts.active.store(false, Ordering::Relaxed);
+                }
+
                 state.position = match state.velocity >= 0.0 {
                     true => 0.0,
-                    false => voice.end as f32,
+                    false => state.end as f32,
                 };
             }
             None => println!("\nErr: Could not find voice '{name}'"),
@@ -783,7 +817,7 @@ impl Conductor {
         } 
 
         let state = SeqState {
-            active: true,
+            active: AtomicBool::new(true),
             period,
             tempo,
             steps,
@@ -792,21 +826,23 @@ impl Conductor {
             seq_idx: 0,
         };
 
-        voice.processes.insert("seq".to_string(), 
-            Arc::new(Mutex::new(Seq { state })));
+        voice.processes.insert(
+            "seq".to_string(), 
+            Arc::new(Mutex::new(Seq { state }))
+        );
     }
 }
 
 struct VoiceState {
-    active: bool,
+    active: AtomicBool,
     position: f32,
+    end: usize,
     velocity: f32,
     gain: f32,
 }
 
 struct Voice {
     samples: Arc<Vec<i16>>,
-    end: usize,
     sample_rate: u32,
     channels: usize,
     state: VoiceState,  
@@ -818,15 +854,15 @@ impl Voice {
     fn new(af: &AudioFile) -> Self {
         let end = af.samples.len() / af.num_channels as usize - 1;
         let state = VoiceState {
-            active: false,
+            active: AtomicBool::new(false),
             position: 0.0,
+            end,
             velocity: 1.0,
             gain: 1.0,
         };
 
         Self {
             samples: Arc::new(af.samples.clone()),
-            end,
             sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
             state,
@@ -836,10 +872,10 @@ impl Voice {
     }
 
     fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
-        if !self.state.active { return; }
+        if !self.state.active.load(Ordering::Relaxed) { return; }
 
         let idx = self.state.position as usize;
-        if idx >= self.end || idx < 0 {
+        if idx >= self.state.end || idx < 0 {
             return;
         }
 
@@ -861,6 +897,11 @@ impl Voice {
         }
 
         let state = &mut self.state;
+
+        for tempo_solo in &self.tempo_solos {
+            let mut ts = tempo_solo.lock().unwrap();
+            ts.update(1.0);
+        }
 
         // processing
         for (_, p) in &self.processes {
@@ -896,7 +937,7 @@ struct Seq {
 }
 
 struct SeqState {
-    active: bool,
+    active: AtomicBool,
     period: usize,
     tempo: Arc<Mutex<TempoState>>,
     steps: Vec<f32>,
@@ -906,19 +947,23 @@ struct SeqState {
 }
 
 impl Process for Seq {
+    // right now only retriggers samples
     fn process(&mut self, voice: &mut VoiceState) {
-        if !self.state.active { return; }
+        let state = &mut self.state;
+        if !state.active.load(Ordering::Relaxed) { return; }
 
-        let tempo = self.state.tempo.lock().unwrap();
+        let tempo = state.tempo.lock().unwrap();
 
         if !tempo.active.load(Ordering::Relaxed) { return; }
 
-        let current = tempo.current() % self.state.period as f32;
+        let current = tempo.current() % state.period as f32;
 
-        println!("{current}");
-        if current > self.state.steps[self.state.seq_idx] {
-            voice.position = 0.0;
-            self.state.seq_idx = (self.state.seq_idx + 1) % self.state.steps.len();
+        if current >= state.steps[state.seq_idx] {
+            voice.position = match voice.velocity >= 0.0 {
+                true => 0.0,
+                false => voice.end as f32,
+            };
+            state.seq_idx = (state.seq_idx + 1) % state.steps.len();
         }
     }
 }
