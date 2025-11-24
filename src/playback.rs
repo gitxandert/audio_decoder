@@ -432,19 +432,15 @@ mod gart_time {
             self.interval = interval_in_samps;
         }
 
-        // store current as AtomicU32, preserving three degrees
-        // of float data by multiplying by 1000.0
+        // store current as AtomicU32
         pub fn update(&mut self, delta_in_samples: f64) {
-            let step_f = delta_in_samples as f32 / self.interval;
-            let step_u = (step_f * 1000.0) as u32;
-            self.current.fetch_add(step_u, Ordering::Relaxed);
+            self.current.fetch_add(delta_in_samples as u32, Ordering::Relaxed);
         }
 
-        // return current as f32, restoring three degrees
-        // of float precision by dividing by 1000.0
+        // return current as f32
         pub fn current(&self) -> f32 {
             let step_u = self.current.load(Ordering::Relaxed);
-            let step_f = step_u as f32 / 1000.0;
+            let step_f = step_u as f32 / self.interval;
             step_f
         }
 
@@ -814,7 +810,7 @@ impl Conductor {
                 }
                 _ => break,
             }
-        } 
+        }
 
         let state = SeqState {
             active: AtomicBool::new(true),
@@ -874,8 +870,21 @@ impl Voice {
     fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
         if !self.state.active.load(Ordering::Relaxed) { return; }
 
-        let idx = self.state.position as usize;
-        if idx >= self.state.end || idx < 0 {
+        let state = &mut self.state;
+
+        for tempo_solo in &self.tempo_solos {
+            let mut ts = tempo_solo.lock().unwrap();
+            ts.update(1.0);
+        }
+
+        // processing
+        for (_, p) in &self.processes {
+            let mut proc = p.lock().unwrap();
+            proc.process(state);
+        }
+
+        let idx = state.position as usize;
+        if idx >= state.end || idx < 0 {
             return;
         }
 
@@ -896,18 +905,6 @@ impl Voice {
             return;
         }
 
-        let state = &mut self.state;
-
-        for tempo_solo in &self.tempo_solos {
-            let mut ts = tempo_solo.lock().unwrap();
-            ts.update(1.0);
-        }
-
-        // processing
-        for (_, p) in &self.processes {
-            let mut proc = p.lock().unwrap();
-            proc.process(state);
-        }
 
         // linear interpolation
         let frac = state.position.fract();
@@ -958,12 +955,14 @@ impl Process for Seq {
 
         let current = tempo.current() % state.period as f32;
 
+        
         if current >= state.steps[state.seq_idx] {
             voice.position = match voice.velocity >= 0.0 {
                 true => 0.0,
                 false => voice.end as f32,
             };
-            state.seq_idx = (state.seq_idx + 1) % state.steps.len();
+            state.seq_idx += 1;
+            state.seq_idx %= (state.steps.len() - 1);
         }
     }
 }
