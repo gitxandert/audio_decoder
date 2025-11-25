@@ -93,6 +93,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                             "load" => con.load_voice(args),
                             "start" => con.start_voice(args),
                             "pause" => con.pause_voice(args),
+                            "resume" => con.resume_voice(args),
                             "stop" => con.stop_voice(args),
                             "unload" => con.unload_voice(args),
                             "velocity" => con.set_velocity(args),
@@ -339,8 +340,6 @@ fn read_char() -> u8 {
     std::io::stdin().read_exact(&mut buf).unwrap();
     buf[0]
 }
-
-
 
 // sample_rate
 // (mainly used by TempoState and TempoGroup)
@@ -608,6 +607,11 @@ impl Conductor {
             Some(voice) => {
                 let state = &mut voice.state;
                 state.active.store(false, Ordering::Relaxed);
+
+                for (_, proc) in &voice.processes {
+                    let mut p = proc.lock().unwrap();
+                    p.reset();
+                }
 
                 for tempo_solo in &voice.tempo_solos {
                     let ts = tempo_solo.lock().unwrap();
@@ -905,7 +909,6 @@ impl Voice {
             return;
         }
 
-
         // linear interpolation
         let frac = state.position.fract();
         let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
@@ -927,6 +930,7 @@ impl Voice {
 //
 trait Process: Send {
     fn process(&mut self, voice: &mut VoiceState);
+    fn reset(&mut self);
 }
 
 struct Seq {
@@ -955,8 +959,6 @@ impl Process for Seq {
 
         let current = tempo.current() % state.period as f32;
 
-        println!("current = {} step = {} idx = {}", current, state.steps[state.seq_idx], state.seq_idx);
-
         if current == state.steps[state.seq_idx] {
             voice.position = match voice.velocity >= 0.0 {
                 true => 0.0,
@@ -965,5 +967,9 @@ impl Process for Seq {
             state.seq_idx += 1;
             state.seq_idx %= state.steps.len();
         }
+    }
+
+    fn reset(&mut self) {
+        self.state.seq_idx = 0;
     }
 }
