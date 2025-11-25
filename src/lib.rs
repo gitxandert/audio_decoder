@@ -1,11 +1,8 @@
-pub mod mpeg;
-pub mod aiff;
-pub mod wav;
-pub mod decode_helpers;
-pub mod playback;
+pub mod audio_processing;
+pub mod file_parsing;
 
-use decode_helpers::{DecodeResult, DecodeError, AudioFile};
-use playback::run_gart;
+use audio_processing::runtime::run_gart;
+use file_parsing::decode_helpers::{DecodeResult, DecodeError, AudioFile};
 
 #[cfg(test)]
 mod tests {
