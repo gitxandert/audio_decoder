@@ -872,15 +872,15 @@ impl Voice {
 
         let state = &mut self.state;
 
-        for tempo_solo in &self.tempo_solos {
-            let mut ts = tempo_solo.lock().unwrap();
-            ts.update(1.0);
-        }
-
         // processing
         for (_, p) in &self.processes {
             let mut proc = p.lock().unwrap();
             proc.process(state);
+        }
+
+        for tempo_solo in &self.tempo_solos {
+            let mut ts = tempo_solo.lock().unwrap();
+            ts.update(1.0);
         }
 
         let idx = state.position as usize;
@@ -955,14 +955,15 @@ impl Process for Seq {
 
         let current = tempo.current() % state.period as f32;
 
-        
-        if current >= state.steps[state.seq_idx] {
+        println!("current = {} step = {} idx = {}", current, state.steps[state.seq_idx], state.seq_idx);
+
+        if current == state.steps[state.seq_idx] {
             voice.position = match voice.velocity >= 0.0 {
                 true => 0.0,
                 false => voice.end as f32,
             };
             state.seq_idx += 1;
-            state.seq_idx %= (state.steps.len() - 1);
+            state.seq_idx %= state.steps.len();
         }
     }
 }
