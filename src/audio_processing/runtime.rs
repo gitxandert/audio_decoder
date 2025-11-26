@@ -17,16 +17,15 @@ use std::{
 
 use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
-    spsc_q::SpscQueue,
     engine::{Conductor, Voice},
+    commands::{CmdArg, Command, CmdQueue},
     gart_time::{gart_time::clock, sample_rate},
 };
 
 pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
     // initialize audio engine and tracks
     
-    let conductor = Arc::new(Mutex::new(Conductor::prepare(num_channels as usize, tracks)));
-    let cond_for_repl = Arc::clone(&conductor);
+    let mut conductor = Conductor::prepare(num_channels as usize, tracks);
 
     sample_rate::set(sample_rate);
 
@@ -74,10 +73,13 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
  
     raw_mode("on");
 
+    let queue = Arc::new(CmdQueue::new(256));
     // REPL
     println!("");
     {
         let buffer = buffer.clone();
+        let q = queue.clone();
+
         thread::spawn(move || {
             loop {
                 let c = read_char();
@@ -90,29 +92,23 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         let mut cmd = buf.clone();
                         let mut parts = cmd.splitn(2, ' ');
                         let cmd = parts.next().unwrap();
-                        let args = parts.next().unwrap_or_else(|| "");
+                        let args = parts.next().unwrap_or_else(|| "").to_string();
 
-                        let mut con = cond_for_repl.lock().unwrap();
-                        match cmd {
-                            "load" => con.load_voice(args),
-                            "start" => con.start_voice(args),
-                            "pause" => con.pause_voice(args),
-                            "resume" => con.resume_voice(args),
-                            "stop" => con.stop_voice(args),
-                            "unload" => con.unload_voice(args),
-                            "velocity" => con.set_velocity(args),
-                            "seq" => con.seq(args),
-                            "q" | "quit" => {
-                                unsafe {
-                                    libc::raise(libc::SIGTERM);
+
+                        if let Some(matched) = q.match_cmd(cmd) {
+                            let command = Command::new(matched, args);
+                            match q.try_push(command) {
+                                Ok(()) => (),
+                                Err(error) => {
+                                    buf.clear();
+                                    println!("\nErr: {error}");
                                 }
-                                break;
                             }
-                            _ => {
-                                buf.clear();
-                                println!("\nUnknown command '{}'", cmd);
-                            }
+                        } else {
+                            buf.clear();
+                            println!("\nUnknown command '{}'", cmd);
                         }
+
                         buf.clear();
                     }
                     127 => {
@@ -233,6 +229,12 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                 continue;
             }
 
+            // apply commands from queue
+            while let Some(cmd) = queue.try_pop() {
+                conductor.apply(cmd);
+            }
+
+            // get remaining frames to write
             let mut remaining = avail as snd_pcm_uframes_t;
 
             while remaining > 0 {
@@ -252,8 +254,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                 }
 
                 // write to DMA buffer
-                let mut con = conductor.lock().unwrap();
-                con.coordinate(areas_ptr, offset, frames);
+                conductor.coordinate(areas_ptr, offset, frames);
 
                 let committed = snd_pcm_mmap_commit(handle, offset, frames) as i32;
                 if committed < 0 {

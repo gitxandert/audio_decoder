@@ -10,6 +10,9 @@ use crate::file_parsing::decode_helpers::{
     DecodeResult, DecodeError, AudioFile,
 };
 use crate::audio_processing::{
+    commands::{
+        CmdArg, Command
+    },
     processes::{
         Process, Seq, SeqState
     },
@@ -37,6 +40,25 @@ impl Conductor {
             out_channels, 
             tracks,
             tempo_groups: HashMap::<String, Arc<Mutex<TempoState>>>::new(),
+        }
+    }
+
+    pub fn apply(&mut self, command: Command) {
+        let (cmd, args) = command.unwrap();
+        match cmd {
+            CmdArg::Load => self.load_voice(args),
+            CmdArg::Start => self.start_voice(args),
+            CmdArg::Pause => self.pause_voice(args),
+            CmdArg::Resume => self.resume_voice(args),
+            CmdArg::Stop => self.stop_voice(args),
+            CmdArg::Unload => self.unload_voice(args),
+            CmdArg::Velocity => self.velocity(args),
+            CmdArg::Seq => self.seq(args),
+            CmdArg::Quit => {
+                unsafe {
+                    libc::raise(libc::SIGTERM);
+                }
+            }
         }
     }
 
@@ -76,8 +98,8 @@ impl Conductor {
         }
     }
 
-    pub fn load_voice(&mut self, name: &str) {
-        match self.tracks.get(&name.to_string()) {
+    pub fn load_voice(&mut self, name: String) {
+        match self.tracks.get(&name) {
             Some(track) => {
                 match self.voices.entry(name.to_string()) {
                     Entry::Vacant(e) => { e.insert(Voice::new(track)); }
@@ -91,8 +113,7 @@ impl Conductor {
         }
     }
 
-    pub fn start_voice(&mut self, name: &str) {
-        let name = name.to_string();
+    pub fn start_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
@@ -113,8 +134,7 @@ impl Conductor {
         }
     }
 
-    pub fn pause_voice(&mut self, name: &str) {
-        let name = name.to_string();
+    pub fn pause_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 voice.state.active.store(false, Ordering::Relaxed);;
@@ -127,8 +147,7 @@ impl Conductor {
         }
     }
 
-    pub fn resume_voice(&mut self, name: &str) {
-        let name = name.to_string();
+    pub fn resume_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
@@ -154,8 +173,7 @@ impl Conductor {
     }
     */
 
-    pub fn stop_voice(&mut self, name: &str) {
-        let name = name.to_string();
+    pub fn stop_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
@@ -180,8 +198,7 @@ impl Conductor {
         }
     }
 
-    pub fn unload_voice(&mut self, name: &str) {
-        let name = name.to_string();
+    pub fn unload_voice(&mut self, name: String) {
         match self.voices.entry(name) {
             Entry::Vacant(_) => {
                 println!("\nErr: Could not find voice");
@@ -191,7 +208,7 @@ impl Conductor {
         }
     }
 
-    pub fn set_velocity(&mut self, args: &str) {
+    pub fn velocity(&mut self, args: String) {
         let mut args = args.splitn(2, ' ');
         let name = match args.next() {
             Some(string) => string,
@@ -235,7 +252,7 @@ impl Conductor {
         }        
     }
 
-    pub fn seq(&mut self, args: &str) {
+    pub fn seq(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let name = match args.next() {
             Some(string) => string,
