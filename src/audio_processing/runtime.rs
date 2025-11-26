@@ -9,7 +9,6 @@ use std::{
     thread,
     ffi::CString,
     io::{self, Read, Write},
-    time::{Duration, Instant},
     collections::{HashMap, hash_map::Entry},
     sync::{Arc, Mutex, 
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}
@@ -18,6 +17,7 @@ use std::{
 
 use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
+    spsc_q::SpscQueue,
     engine::{Conductor, Voice},
     gart_time::{gart_time::clock, sample_rate},
 };
