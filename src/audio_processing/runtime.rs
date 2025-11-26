@@ -32,11 +32,13 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
     // take over STDIN
     let marker = Arc::new(Mutex::new(0usize));
     let buffer = Arc::new(Mutex::new(String::new()));
+    let cursor = Arc::new(Mutex::new(0usize));
     let repl_chars = ['^', 'X', 'v', '>', 'X', '<', 'Z'];
 
     {
         let marker = marker.clone();
         let buffer = buffer.clone();
+        let cursor = cursor.clone();
         let sr = sample_rate.clone();
         thread::spawn(move || {
             let mut last_len = 0;
@@ -65,6 +67,11 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                     }
                     last_len = curr_len;
 
+                    let cur = *cursor.lock().unwrap();
+                    let len = buf.len();
+                    let diff = len - cur;
+                    print!("\x1b[{}D", diff);
+
                     std::io::stdout().flush().unwrap();
                 }
             }
@@ -78,6 +85,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
     println!("");
     {
         let buffer = buffer.clone();
+        let cursor = cursor.clone();
         let q = queue.clone();
 
         thread::spawn(move || {
@@ -114,8 +122,13 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                     127 => {
                         // backspace
                         let mut buf = buffer.lock().unwrap();
+                        let mut cur = cursor.lock().unwrap();
+
                         if !buf.is_empty() {
-                            buf.pop();
+                            if *cur > 0 {
+                                buf.remove(*cur - 1);
+                                *cur -= 1;
+                            }
                         }
                     }
                     3 => {
@@ -126,9 +139,36 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         println!("\nInterrupted.");
                         std::process::exit(130);
                     }
+                    27 => {
+                        // ESC
+                        let c2 = read_char();
+                        if c2 == b'[' {
+                            let c3 = read_char();
+                            print!("{}", c3);
+                            match c3 {
+                                b'D' => { // left arrow
+                                    let mut cur = cursor.lock().unwrap();
+                                    if *cur > 0 { *cur -= 1; }
+                                }
+                                b'C' => { // right arrow
+                                    let mut cur = cursor.lock().unwrap();
+                                    let buf = buffer.lock().unwrap();
+                                    if *cur < buf.len() { *cur += 1; }
+                                }
+                                b'A' => { // up arrow
+                                }
+                                b'B' => { // down arrow
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+                    }
                     _ => {
                         let mut buf = buffer.lock().unwrap();
+                        let mut cur = cursor.lock().unwrap();
                         buf.push(c as char);
+                        *cur += 1;
                     }
                 }
             }
