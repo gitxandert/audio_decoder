@@ -66,12 +66,11 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         print!("\x1b[{}D", diff);
                     }
                     last_len = curr_len;
-
+ 
                     let cur = *cursor.lock().unwrap();
-                    let len = buf.len();
-                    let diff = len - cur;
+                    let diff = curr_len - cur;
                     print!("\x1b[{}D", diff);
-
+                   
                     std::io::stdout().flush().unwrap();
                 }
             }
@@ -97,11 +96,14 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         // enter
                         print!("\n");
                         let mut buf = buffer.lock().unwrap();
+
+                        let mut cur = cursor.lock().unwrap();
+                        *cur = 0;
+
                         let mut cmd = buf.clone();
                         let mut parts = cmd.splitn(2, ' ');
                         let cmd = parts.next().unwrap();
                         let args = parts.next().unwrap_or_else(|| "").to_string();
-
 
                         if let Some(matched) = q.match_cmd(cmd) {
                             let command = Command::new(matched, args);
@@ -144,22 +146,21 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         let c2 = read_char();
                         if c2 == b'[' {
                             let c3 = read_char();
-                            print!("{}", c3);
                             match c3 {
                                 b'D' => { // left arrow
                                     let mut cur = cursor.lock().unwrap();
                                     if *cur > 0 { *cur -= 1; }
                                 }
                                 b'C' => { // right arrow
-                                    let mut cur = cursor.lock().unwrap();
                                     let buf = buffer.lock().unwrap();
+                                    let mut cur = cursor.lock().unwrap();
                                     if *cur < buf.len() { *cur += 1; }
                                 }
                                 b'A' => { // up arrow
                                 }
                                 b'B' => { // down arrow
                                 }
-                                _ => {}
+                                _ => (),
                             }
                             continue;
                         }
@@ -350,6 +351,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         raw_mode("off");
         eprintln!("\nPanic: {info}");
+        std::process::exit(130);
     }));
 }
 
