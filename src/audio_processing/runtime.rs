@@ -40,6 +40,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
         let buffer = buffer.clone();
         let cursor = cursor.clone();
         let sr = sample_rate.clone();
+
         thread::spawn(move || {
             let mut last_len = 0;
             loop {
@@ -87,6 +88,8 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
         let cursor = cursor.clone();
         let q = queue.clone();
 
+        let prev_cmds = Vec::<String>::new();
+
         thread::spawn(move || {
             loop {
                 let c = read_char();
@@ -101,6 +104,8 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         *cur = 0;
 
                         let mut cmd = buf.clone();
+                        prev_cmd.push(cmd.clone());
+
                         let mut parts = cmd.splitn(2, ' ');
                         let cmd = parts.next().unwrap();
                         let args = parts.next().unwrap_or_else(|| "").to_string();
