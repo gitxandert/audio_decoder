@@ -88,7 +88,8 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
         let cursor = cursor.clone();
         let q = queue.clone();
 
-        let prev_cmds = Vec::<String>::new();
+        let mut cmd_history = Vec::<String>::new();
+        let mut cmd_idx = cmd_history.len();
 
         thread::spawn(move || {
             loop {
@@ -104,7 +105,8 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         *cur = 0;
 
                         let mut cmd = buf.clone();
-                        prev_cmd.push(cmd.clone());
+                        cmd_history.push(cmd.clone());
+                        cmd_idx = cmd_history.len();
 
                         let mut parts = cmd.splitn(2, ' ');
                         let cmd = parts.next().unwrap();
@@ -162,8 +164,26 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                                     if *cur < buf.len() { *cur += 1; }
                                 }
                                 b'A' => { // up arrow
+                                    if cmd_idx > 0 {
+                                        cmd_idx -= 1;
+                                        let mut buf = buffer.lock().unwrap();
+                                        buf.clear();
+                                        if let Some(prev) = cmd_history.get(cmd_idx) {
+                                            *buf = prev.clone();
+                                        }
+                                    }
                                 }
                                 b'B' => { // down arrow
+                                    if cmd_idx < cmd_history.len() {
+                                        cmd_idx += 1;
+                                        let mut buf = buffer.lock().unwrap();
+                                        buf.clear();
+                                        if cmd_idx < cmd_history.len() {
+                                            if let Some(prev) = cmd_history.get(cmd_idx) {
+                                                *buf = prev.clone();
+                                            }
+                                        }
+                                    }
                                 }
                                 _ => (),
                             }
