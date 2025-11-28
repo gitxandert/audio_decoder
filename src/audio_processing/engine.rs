@@ -1,6 +1,7 @@
 use std::collections::{HashMap, hash_map::Entry};
+use std::cell::RefCell;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering}
 };
 
@@ -267,7 +268,7 @@ impl Conductor {
         };
 
         let mut period: usize = sample_rate::get() as usize;
-        let mut tempo: TempoState = TempoState::new();
+        let mut tempo: RefCell<TempoState> = RefCell::new(TempoState::new());
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
@@ -289,7 +290,7 @@ impl Conductor {
                         let tg_name = String::from(&t_arg[1..]);
                         tempo = match self.tempo_groups.get(&tg_name) {
                             Some(group) => {
-                                group.clone();
+                                RefCell::new(group);
                                 continue;
                             }
                             None => {
@@ -317,9 +318,13 @@ impl Conductor {
                         }
                     };
 
-                    tempo.init(TempoMode::Solo, unit, interval);
+                    let mut tempo_ref = TempoState::new();
 
-                    voice.tempo_solos.push(tempo.clone());
+                    tempo_ref.init(TempoMode::Solo, unit, interval);
+                    voice.tempo_solos.push(tempo_ref);
+
+                    tempo = RefCell::new(*voice.tempo_solos.get(voice.tempo_solos.len() - 1).unwrap());
+
                 }
                 "-p" | "--period" => {
                     period = match args.next() {
