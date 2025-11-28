@@ -54,6 +54,7 @@ impl Conductor {
             CmdArg::Unload => self.unload_voice(args),
             CmdArg::Velocity => self.velocity(args),
             CmdArg::Seq => self.seq(args),
+            CmdArg::TempoGroup => todo!(),
             CmdArg::Quit => {
                 unsafe {
                     libc::raise(libc::SIGTERM);

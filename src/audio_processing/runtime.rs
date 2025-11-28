@@ -3,11 +3,15 @@ use std::os::unix::io::AsRawFd;
 use libc::{
     self, 
     c_int, EAGAIN, EPIPE,
-    termios, tcgetattr, tcsetattr, cfmakeraw, TCSANOW};
+    ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ,
+    termios, tcgetattr, tcsetattr, cfmakeraw, TCSANOW,
+};
 use std::{
+    mem,
     ptr,
     thread,
     ffi::CString,
+    time::Duration,
     io::{self, Read, Write},
     collections::{HashMap, hash_map::Entry},
     sync::{Arc, Mutex, 
@@ -41,6 +45,10 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
         let cursor = cursor.clone();
         let sr = sample_rate.clone();
 
+        let mut width = 80usize;
+        let mut height = 40usize;
+        let mut divider = width / 3;
+
         thread::spawn(move || {
             let mut last_len = 0;
             loop {
@@ -67,11 +75,36 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                         print!("\x1b[{}D", diff);
                     }
                     last_len = curr_len;
- 
+
+/*
+                    unsafe {
+                        let mut ws: winsize = mem::zeroed();
+                        if ioctl(STDOUT_FILENO, TIOCGWINSZ.into(), &mut ws) == 0 {
+                            width = ws.ws_col as usize;
+                            height = ws.ws_row as usize;
+                            divider = width / 3;
+                        };
+                    }
+
+                    let mut term = String::with_capacity(width * height);
+
+                    for j in {0..height} {
+                        for i in {0..width} {
+                            if i == divider {
+                                term.push('|');
+                            } else {
+                                term.push(' ');
+                            }
+                        }
+                    }
+                    print!("\x1b[H{}", term);
+                    
+                    print!("\x1b[H");
+  */
                     let cur = *cursor.lock().unwrap();
                     let diff = curr_len - cur;
                     print!("\x1b[{}D", diff);
-                   
+
                     std::io::stdout().flush().unwrap();
                 }
             }
@@ -217,7 +250,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                 &mut handle,
                 dev.as_ptr(),
                 SND_PCM_STREAM_PLAYBACK,
-                SND_PCM_NONBLOCK,
+                0,
             ),
             "snd_pcm_open",
         );
@@ -281,6 +314,11 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                 break;
             }
 
+            // apply commands from queue
+            while let Some(cmd) = queue.try_pop() {
+                conductor.apply(cmd);
+            }
+
             let mut avail = snd_pcm_avail_update(handle) as i32;
             if avail == -EPIPE {
                 // underrun
@@ -291,13 +329,12 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                 snd_pcm_recover(handle, avail, 1);
                 continue;
             }
-            if avail == 0 {
+            if avail < period_size as i32 {
+                let r = snd_pcm_wait(handle, -1);
+                if r < 0 {
+                    snd_pcm_recover(handle, r, 1);
+                }
                 continue;
-            }
-
-            // apply commands from queue
-            while let Some(cmd) = queue.try_pop() {
-                conductor.apply(cmd);
             }
 
             // get remaining frames to write

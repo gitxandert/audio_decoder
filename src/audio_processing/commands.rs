@@ -78,6 +78,7 @@ impl CmdQueue {
 
 #[derive(Copy, Clone)]
 pub enum CmdArg {
+    // Voices
     Load,
     Start,
     Pause,
@@ -85,7 +86,11 @@ pub enum CmdArg {
     Stop,
     Unload,
     Velocity,
+    // Processes
     Seq,
+    // Tempo
+    TempoGroup,
+    // Program
     Quit,
 }
 
