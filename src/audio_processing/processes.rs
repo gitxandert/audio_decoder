@@ -22,7 +22,7 @@ pub struct Seq {
 pub struct SeqState {
     pub active: AtomicBool,
     pub period: usize,
-    pub tempo: Arc<Mutex<TempoState>>,
+    pub tempo: TempoState,
     pub steps: Vec<f32>,
     pub chance: Vec<f32>,
     pub jit: Vec<f32>,
@@ -35,7 +35,7 @@ impl Process for Seq {
         let state = &mut self.state;
         if !state.active.load(Ordering::Relaxed) { return; }
 
-        let tempo = state.tempo.lock().unwrap();
+        let tempo = &state.tempo;
 
         if !tempo.active.load(Ordering::Relaxed) { return; }
 

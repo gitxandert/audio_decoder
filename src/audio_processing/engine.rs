@@ -30,7 +30,7 @@ pub struct Conductor {
     voices: HashMap<String, Voice>,
     out_channels: usize,
     tracks: HashMap<String, AudioFile>,
-    tempo_groups: HashMap<String, Arc<Mutex<TempoState>>>,
+    tempo_groups: HashMap<String, TempoState>,
 }
 
 impl Conductor {
@@ -39,7 +39,7 @@ impl Conductor {
             voices: HashMap::<String, Voice>::new(), 
             out_channels, 
             tracks,
-            tempo_groups: HashMap::<String, Arc<Mutex<TempoState>>>::new(),
+            tempo_groups: HashMap::<String, TempoState>::new(),
         }
     }
 
@@ -82,8 +82,7 @@ impl Conductor {
                         *sample_ptr = 0;
                     }
 
-                    for (_, tempo_group) in &self.tempo_groups {
-                        let mut tg = tempo_group.lock().unwrap();
+                    for (_, tg) in &mut self.tempo_groups {
                         if tg.active.load(Ordering::Relaxed) {
                             tg.update(1.0);
                         }
@@ -120,8 +119,7 @@ impl Conductor {
                 let state = &mut voice.state;
                 state.active.store(true, Ordering::Relaxed);
                 
-                for tempo_solo in &voice.tempo_solos {
-                    let mut ts = tempo_solo.lock().unwrap();
+                for ts in &mut voice.tempo_solos {
                     ts.active.store(true, Ordering::Relaxed);
                     ts.reset();
                 }
@@ -139,8 +137,7 @@ impl Conductor {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 voice.state.active.store(false, Ordering::Relaxed);;
-                for tempo_solo in &voice.tempo_solos {
-                    let ts = tempo_solo.lock().unwrap();
+                for ts in &voice.tempo_solos {
                     ts.active.store(false, Ordering::Relaxed);
                 }
             }
@@ -153,8 +150,7 @@ impl Conductor {
             Some(voice) => {
                 let state = &mut voice.state;
                 state.active.store(true, Ordering::Relaxed);
-                for tempo_solo in &voice.tempo_solos {
-                    let ts = tempo_solo.lock().unwrap();
+                for ts in &voice.tempo_solos {
                     ts.active.store(true, Ordering::Relaxed);
                 }
             }
@@ -180,13 +176,11 @@ impl Conductor {
                 let state = &mut voice.state;
                 state.active.store(false, Ordering::Relaxed);
 
-                for (_, proc) in &voice.processes {
-                    let mut p = proc.lock().unwrap();
+                for (_, p) in &mut voice.processes {
                     p.reset();
                 }
 
-                for tempo_solo in &voice.tempo_solos {
-                    let ts = tempo_solo.lock().unwrap();
+                for ts in &voice.tempo_solos {
                     ts.active.store(false, Ordering::Relaxed);
                 }
 
@@ -273,7 +267,7 @@ impl Conductor {
         };
 
         let mut period: usize = sample_rate::get() as usize;
-        let mut tempo: Arc<Mutex<TempoState>> = Arc::new(Mutex::new(TempoState::new()));
+        let mut tempo: TempoState = TempoState::new();
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
@@ -295,7 +289,7 @@ impl Conductor {
                         let tg_name = String::from(&t_arg[1..]);
                         tempo = match self.tempo_groups.get(&tg_name) {
                             Some(group) => {
-                                Arc::clone(group);
+                                group.clone();
                                 continue;
                             }
                             None => {
@@ -305,8 +299,6 @@ impl Conductor {
                         };
                     }
                     
-                    let mut t = tempo.lock().unwrap();
-
                     let unit = match u {
                         's' => TempoUnit::Samples,
                         'm' => TempoUnit::Millis,
@@ -325,11 +317,9 @@ impl Conductor {
                         }
                     };
 
-                    t.init(TempoMode::Solo, unit, interval);
+                    tempo.init(TempoMode::Solo, unit, interval);
 
-                    drop(t);
-
-                    voice.tempo_solos.push(Arc::clone(&tempo));
+                    voice.tempo_solos.push(tempo.clone());
                 }
                 "-p" | "--period" => {
                     period = match args.next() {
@@ -399,7 +389,7 @@ impl Conductor {
 
         voice.processes.insert(
             "seq".to_string(), 
-            Arc::new(Mutex::new(Seq { state }))
+            Box::new(Seq { state })
         );
     }
 }
@@ -417,8 +407,8 @@ pub struct Voice {
     sample_rate: u32,
     channels: usize,
     pub state: VoiceState,  
-    processes: HashMap<String, Arc<Mutex<dyn Process>>>,
-    tempo_solos: Vec<Arc<Mutex<TempoState>>>,
+    processes: HashMap<String, Box<dyn Process>>,
+    tempo_solos: Vec<TempoState>,
 }
 
 impl Voice {
@@ -437,8 +427,8 @@ impl Voice {
             sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
             state,
-            processes: HashMap::<String, Arc<Mutex<dyn Process>>>::new(),
-            tempo_solos: Vec::<Arc<Mutex<TempoState>>>::new(),
+            processes: HashMap::<String, Box<dyn Process>>::new(),
+            tempo_solos: Vec::<TempoState>::new(),
         }
     }
 
@@ -448,13 +438,11 @@ impl Voice {
         let state = &mut self.state;
 
         // processing
-        for (_, p) in &self.processes {
-            let mut proc = p.lock().unwrap();
-            proc.process(state);
+        for (_, p) in &mut self.processes {
+            p.process(state);
         }
 
-        for tempo_solo in &self.tempo_solos {
-            let mut ts = tempo_solo.lock().unwrap();
+        for ts in &mut self.tempo_solos {
             ts.update(1.0);
         }
 

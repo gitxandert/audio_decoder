@@ -59,13 +59,13 @@ pub mod gart_time {
         pub current: AtomicU32,
     }
 
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     pub enum TempoMode {
         Solo,
         Group,
     }
 
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     pub enum TempoUnit {
         Samples,
         Millis,
@@ -88,6 +88,12 @@ pub mod gart_time {
             self.mode = mode;
             self.unit = unit; 
             self.interval = interval_in_samps;
+        }
+
+        pub fn clone(&self) -> TempoState {
+            let mut clone = TempoState::new();
+            clone.init(self.mode.clone(), self.unit.clone(), self.interval);
+            clone
         }
 
         // store current as AtomicU32

@@ -107,7 +107,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
 
                     std::io::stdout().flush().unwrap();
                 }
-                thread::sleep(Duration::from_micros(1000));
+                thread::sleep(Duration::from_millis(15));
             }
         });
     }
@@ -232,7 +232,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                     }
                 }
             }
-            thread::sleep(Duration::from_millis(15));
+            thread::sleep(Duration::from_millis(10));
         });
     }
 
