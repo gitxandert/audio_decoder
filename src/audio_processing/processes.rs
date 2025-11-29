@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::{
     Arc, Mutex, 
@@ -11,7 +12,7 @@ use crate::audio_processing::{
 
 // Processes 
 //
-pub trait Process: Send {
+pub trait Process {
     fn process(&mut self, voice: &mut VoiceState);
     fn reset(&mut self);
 }
@@ -23,7 +24,7 @@ pub struct Seq {
 pub struct SeqState {
     pub active: AtomicBool,
     pub period: usize,
-    pub tempo: RefCell<TempoState>,
+    pub tempo: Rc<RefCell<TempoState>>,
     pub steps: Vec<f32>,
     pub chance: Vec<f32>,
     pub jit: Vec<f32>,
