@@ -1,6 +1,6 @@
 # GART: Generative Audio in Real Time
 
-This project aims to facilitate real-time, generative audio in Rust. It will feature a scripting language that can be both interpreted and compiled into Rust code.
+This project aims to facilitate real-time, generative audio in Rust. It features a Bash-like scripting language that is interpreted by a REPL.
 
 ## Dependencies
 
@@ -15,13 +15,14 @@ One of the goals of this project is to realize as many features as possible with
 **src/lib.rs**:
 - exposes modules to main.rs and hosts testing
 
-**src/playback.rs**  
-- configures ALSA according to (currently) a single audio file's parameters
+**src/audio_processing**  
+- pre-parses all audio files in the assets/ folder
+- configures ALSA according to a consensus based on the audio files' properties (namely sample rate and number of channels)
 - interacts directly with hardware and the DMA buffer for low-latency writes
-- interprets rudimentary playback commands through a REPL
-- uses terminal in raw mode for custom output to the screen
+- stores commands parsed by the REPL thread into a lock-free command queue for the audio thread
+- uses terminal in raw mode for custom terminal rendering
 
-**parsing modules**:
+**src/file_parsing**:
 - mpeg
   - parses frames by:
     <ol type="1">
