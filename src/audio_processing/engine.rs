@@ -1,4 +1,5 @@
 use std::collections::{HashMap, hash_map::Entry};
+use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::{
     Arc,
@@ -31,7 +32,7 @@ pub struct Conductor {
     voices: HashMap<String, Voice>,
     out_channels: usize,
     tracks: HashMap<String, AudioFile>,
-    tempo_groups: HashMap<String, TempoState>,
+    tempo_groups: HashMap<String, Rc<RefCell<TempoState>>>,
 }
 
 impl Conductor {
@@ -40,7 +41,7 @@ impl Conductor {
             voices: HashMap::<String, Voice>::new(), 
             out_channels, 
             tracks,
-            tempo_groups: HashMap::<String, TempoState>::new(),
+            tempo_groups: HashMap::<String, Rc<RefCell<TempoState>>>::new(),
         }
     }
 
@@ -83,7 +84,8 @@ impl Conductor {
                         *sample_ptr = 0;
                     }
 
-                    for (_, tg) in &mut self.tempo_groups {
+                    for (_, tempo_group) in &mut self.tempo_groups {
+                        let mut tg = tempo_group.borrow_mut();
                         if tg.active.load(Ordering::Relaxed) {
                             tg.update(1.0);
                         }
@@ -120,7 +122,8 @@ impl Conductor {
                 let state = &mut voice.state;
                 state.active.store(true, Ordering::Relaxed);
                 
-                for ts in &mut voice.tempo_solos {
+                for tempo_state in &mut voice.tempo_solos {
+                    let mut ts = tempo_state.borrow_mut();
                     ts.active.store(true, Ordering::Relaxed);
                     ts.reset();
                 }
@@ -137,8 +140,9 @@ impl Conductor {
     pub fn pause_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
-                voice.state.active.store(false, Ordering::Relaxed);;
-                for ts in &voice.tempo_solos {
+                voice.state.active.store(false, Ordering::Relaxed);
+                for tempo_state in &voice.tempo_solos {
+                    let mut ts = tempo_state.borrow_mut();
                     ts.active.store(false, Ordering::Relaxed);
                 }
             }
@@ -151,7 +155,8 @@ impl Conductor {
             Some(voice) => {
                 let state = &mut voice.state;
                 state.active.store(true, Ordering::Relaxed);
-                for ts in &voice.tempo_solos {
+                for tempo_state in &voice.tempo_solos {
+                    let mut ts = tempo_state.borrow_mut();
                     ts.active.store(true, Ordering::Relaxed);
                 }
             }
@@ -181,7 +186,8 @@ impl Conductor {
                     p.reset();
                 }
 
-                for ts in &voice.tempo_solos {
+                for tempo_state in &voice.tempo_solos {
+                    let mut ts = tempo_state.borrow_mut();
                     ts.active.store(false, Ordering::Relaxed);
                 }
 
@@ -268,7 +274,7 @@ impl Conductor {
         };
 
         let mut period: usize = sample_rate::get() as usize;
-        let mut tempo: RefCell<TempoState> = RefCell::new(TempoState::new());
+        let mut tempo: Rc<RefCell<TempoState>> = Rc::new(RefCell::new(TempoState::new()));
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
@@ -290,7 +296,7 @@ impl Conductor {
                         let tg_name = String::from(&t_arg[1..]);
                         tempo = match self.tempo_groups.get(&tg_name) {
                             Some(group) => {
-                                RefCell::new(group);
+                                Rc::clone(&group);
                                 continue;
                             }
                             None => {
@@ -318,13 +324,12 @@ impl Conductor {
                         }
                     };
 
-                    let mut tempo_ref = TempoState::new();
+                    let tempo_ref = Rc::new(RefCell::new(TempoState::new()));
+                    tempo_ref.borrow_mut().init(TempoMode::Solo, unit, interval);
 
-                    tempo_ref.init(TempoMode::Solo, unit, interval);
+                    tempo = Rc::clone(&tempo_ref);
+
                     voice.tempo_solos.push(tempo_ref);
-
-                    tempo = RefCell::new(*voice.tempo_solos.get(voice.tempo_solos.len() - 1).unwrap());
-
                 }
                 "-p" | "--period" => {
                     period = match args.next() {
@@ -413,7 +418,7 @@ pub struct Voice {
     channels: usize,
     pub state: VoiceState,  
     processes: HashMap<String, Box<dyn Process>>,
-    tempo_solos: Vec<TempoState>,
+    tempo_solos: Vec<Rc<RefCell<TempoState>>>,
 }
 
 impl Voice {
@@ -433,7 +438,7 @@ impl Voice {
             channels: af.num_channels as usize, 
             state,
             processes: HashMap::<String, Box<dyn Process>>::new(),
-            tempo_solos: Vec::<TempoState>::new(),
+            tempo_solos: Vec::<Rc<RefCell<TempoState>>>::new(),
         }
     }
 
@@ -447,7 +452,8 @@ impl Voice {
             p.process(state);
         }
 
-        for ts in &mut self.tempo_solos {
+        for tempo_state in &mut self.tempo_solos {
+            let mut ts = tempo_state.borrow_mut();
             ts.update(1.0);
         }
 
