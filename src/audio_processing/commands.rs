@@ -65,7 +65,8 @@ impl CmdQueue {
         match cmd {
             "load" => Some(CmdArg::Load),
             "start" => Some(CmdArg::Start),
-            "pause" => Some(CmdArg::Resume),
+            "pause" => Some(CmdArg::Pause),
+            "resume" => Some(CmdArg::Resume),
             "stop" => Some(CmdArg::Stop),
             "unload" => Some(CmdArg::Unload),
             "velocity" => Some(CmdArg::Velocity),
