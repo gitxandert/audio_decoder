@@ -482,10 +482,15 @@ impl Voice {
         }
 
         // linear interpolation
-        let frac = state.position.fract();
+        let mut sample = 0f32;
         let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
-        let s1 = self.samples[((idx + 1) * self.channels) + (ch % self.channels)] as f32;
-        let sample = s0 * (1.0 - frac) + s1 * frac;
+        if state.velocity != 1.0 {
+            let frac = state.position.fract();
+            let s1 = self.samples[((idx + 1) * self.channels) + (ch % self.channels)] as f32;
+            sample = s0 * (1.0 - frac) + s1 * frac;
+        } else {
+            sample = s0;
+        }
 
         unsafe {
             *acc += (sample * state.gain) as i16;
