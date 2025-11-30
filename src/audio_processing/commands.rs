@@ -70,6 +70,7 @@ impl CmdQueue {
             "stop" => Some(CmdArg::Stop),
             "unload" => Some(CmdArg::Unload),
             "velocity" => Some(CmdArg::Velocity),
+            "group" => Some(CmdArg::Group),
             "seq" => Some(CmdArg::Seq),
             "q" | "quit" => Some(CmdArg::Quit),
             _ => None,
@@ -87,10 +88,10 @@ pub enum CmdArg {
     Stop,
     Unload,
     Velocity,
+    // Groups
+    Group,
     // Processes
     Seq,
-    // Tempo
-    TempoGroup,
     // Program
     Quit,
 }
