@@ -105,7 +105,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
   */
                     let cur = *cursor.lock().unwrap();
                     let diff = curr_len - cur;
-                    print!("\x1b[{}D", diff);
+                    print!(" \x1b[{}D", diff);
 
                     std::io::stdout().flush().unwrap();
                 }
