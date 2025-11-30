@@ -41,6 +41,7 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
 
     {
         let marker = marker.clone();
+        let marker_for_mt = marker.clone();
         let buffer = buffer.clone();
         let cursor = cursor.clone();
         let sr = sample_rate.clone();
@@ -50,15 +51,16 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
         let mut divider = width / 3;
 
         thread::spawn(move || {
+            loop {
+                let mut m = marker_for_mt.lock().unwrap();
+                *m = (*m + 1) % repl_chars.len();
+                drop(m);
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        thread::spawn(move || {
             let mut last_len = 0;
             loop {
-                {
-                    // every 100 ms, change the REPL marker
-                    let mut m = marker.lock().unwrap();
-                    let tenth = (clock::current() / (sr as u64 / 10u64));
-                    *m = tenth as usize % repl_chars.len();
-                }
-
                 {
                     // redraw marker + input_text
                     let m = *marker.lock().unwrap();
@@ -232,7 +234,6 @@ pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channe
                     }
                 }
             }
-            thread::sleep(Duration::from_millis(10));
         });
     }
 

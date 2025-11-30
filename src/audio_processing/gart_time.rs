@@ -55,8 +55,8 @@ pub mod gart_time {
         pub mode: TempoMode,
         pub unit: TempoUnit,
         pub interval: f32,
-        pub active: AtomicBool,
-        pub current: AtomicU32,
+        pub active: bool,
+        pub current: u32,
     }
 
     #[derive(Clone, Debug)]
@@ -78,8 +78,8 @@ pub mod gart_time {
                 mode: TempoMode::Solo,
                 unit: TempoUnit::Samples,
                 interval: sample_rate::get() as f32,
-                active: AtomicBool::new(false),
-                current: AtomicU32::new(0),
+                active: false,
+                current: 0,
             }
         }
 
@@ -98,18 +98,17 @@ pub mod gart_time {
 
         // store current as AtomicU32
         pub fn update(&mut self, delta_in_samples: f64) {
-            self.current.fetch_add(delta_in_samples as u32, Ordering::Relaxed);
+            self.current += delta_in_samples as u32;
         }
 
         // return current as f32
         pub fn current(&self) -> f32 {
-            let step_u = self.current.load(Ordering::Relaxed);
-            let step_f = step_u as f32 / self.interval;
+            let step_f = self.current as f32 / self.interval;
             step_f
         }
 
         pub fn reset(&mut self) {
-            self.current.store(0, Ordering::Relaxed);
+            self.current = 0;
         }
 
         pub fn set_interval(&mut self, new_interval: f32) {

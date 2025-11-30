@@ -86,13 +86,15 @@ impl Conductor {
 
                     for (_, tempo_group) in &mut self.tempo_groups {
                         let mut tg = tempo_group.borrow_mut();
-                        if tg.active.load(Ordering::Relaxed) {
+                        if tg.active {
                             tg.update(1.0);
                         }
                     }
                     
                     for (_, voice) in &mut self.voices {
-                        voice.process(sample_ptr, f, ch);
+                        if voice.state.active {
+                            voice.process(sample_ptr, f, ch);
+                        }
                     }
                 }
 
@@ -120,11 +122,11 @@ impl Conductor {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
-                state.active.store(true, Ordering::Relaxed);
+                state.active = true;
                 
                 for tempo_state in &mut voice.tempo_solos {
                     let mut ts = tempo_state.borrow_mut();
-                    ts.active.store(true, Ordering::Relaxed);
+                    ts.active = true;
                     ts.reset();
                 }
 
@@ -140,10 +142,10 @@ impl Conductor {
     pub fn pause_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
-                voice.state.active.store(false, Ordering::Relaxed);
+                voice.state.active = false;
                 for tempo_state in &voice.tempo_solos {
                     let mut ts = tempo_state.borrow_mut();
-                    ts.active.store(false, Ordering::Relaxed);
+                    ts.active = false;
                 }
             }
             None => println!("\nErr: Could not find voice '{name}'"),
@@ -154,10 +156,10 @@ impl Conductor {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
-                state.active.store(true, Ordering::Relaxed);
+                state.active = true;
                 for tempo_state in &voice.tempo_solos {
                     let mut ts = tempo_state.borrow_mut();
-                    ts.active.store(true, Ordering::Relaxed);
+                    ts.active = true;
                 }
             }
             None => println!("\nErr: Could not find voice '{name}'"),
@@ -180,7 +182,7 @@ impl Conductor {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
-                state.active.store(false, Ordering::Relaxed);
+                state.active = false;
 
                 for (_, p) in &mut voice.processes {
                     p.reset();
@@ -188,7 +190,7 @@ impl Conductor {
 
                 for tempo_state in &voice.tempo_solos {
                     let mut ts = tempo_state.borrow_mut();
-                    ts.active.store(false, Ordering::Relaxed);
+                    ts.active = false;
                 }
 
                 state.position = match state.velocity >= 0.0 {
@@ -388,7 +390,7 @@ impl Conductor {
         }
 
         let state = SeqState {
-            active: AtomicBool::new(true),
+            active: true,
             period,
             tempo,
             steps,
@@ -405,7 +407,7 @@ impl Conductor {
 }
 
 pub struct VoiceState {
-    pub active: AtomicBool,
+    pub active: bool,
     pub position: f32,
     pub end: usize,
     pub velocity: f32,
@@ -425,7 +427,7 @@ impl Voice {
     fn new(af: &AudioFile) -> Self {
         let end = af.samples.len() / af.num_channels as usize - 1;
         let state = VoiceState {
-            active: AtomicBool::new(false),
+            active: false,
             position: 0.0,
             end,
             velocity: 1.0,
@@ -443,7 +445,7 @@ impl Voice {
     }
 
     fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
-        if !self.state.active.load(Ordering::Relaxed) { return; }
+        if !self.state.active { return; }
 
         let state = &mut self.state;
 

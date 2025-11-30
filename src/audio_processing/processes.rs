@@ -1,9 +1,5 @@
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::sync::{
-    Arc, Mutex, 
-    atomic::{AtomicBool, Ordering},
-};
 
 use crate::audio_processing::{
     engine::VoiceState,
@@ -22,7 +18,7 @@ pub struct Seq {
 }
 
 pub struct SeqState {
-    pub active: AtomicBool,
+    pub active: bool,
     pub period: usize,
     pub tempo: Rc<RefCell<TempoState>>,
     pub steps: Vec<f32>,
@@ -35,11 +31,11 @@ impl Process for Seq {
     // right now only retriggers samples
     fn process(&mut self, voice: &mut VoiceState) {
         let state = &mut self.state;
-        if !state.active.load(Ordering::Relaxed) { return; }
+        if !state.active { return; }
 
         let tempo = state.tempo.borrow();
 
-        if !tempo.active.load(Ordering::Relaxed) { return; }
+        if !tempo.active { return; }
 
         let current = tempo.current() % state.period as f32;
 
