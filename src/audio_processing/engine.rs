@@ -480,7 +480,7 @@ impl Conductor {
 
         voice.processes.insert(
             "seq".to_string(), 
-            Box::new(Seq { state })
+            Process::Seq(Seq { state })
         );
     }
 }
@@ -498,7 +498,7 @@ pub struct Voice {
     sample_rate: u32,
     channels: usize,
     pub state: VoiceState,  
-    processes: HashMap<String, Box<dyn Process>>,
+    processes: HashMap<String, Process>,
     tempo_solos: Vec<Rc<RefCell<TempoState>>>,
 }
 
@@ -518,7 +518,7 @@ impl Voice {
             sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
             state,
-            processes: HashMap::<String, Box<dyn Process>>::new(),
+            processes: HashMap::<String, Process>::new(),
             tempo_solos: Vec::<Rc<RefCell<TempoState>>>::new(),
         }
     }

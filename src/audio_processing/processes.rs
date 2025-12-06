@@ -8,9 +8,23 @@ use crate::audio_processing::{
 
 // Processes 
 //
-pub trait Process {
-    fn process(&mut self, voice: &mut VoiceState);
-    fn reset(&mut self);
+
+pub enum Process {
+    Seq(Seq),
+}
+
+impl Process {
+    pub fn process(&mut self, voice: &mut VoiceState) {
+        match self {
+            Process::Seq(p) => p.process(voice),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        match self {
+            Process::Seq(p) => p.reset(),
+        }
+    }
 }
 
 pub struct Seq {
@@ -27,7 +41,7 @@ pub struct SeqState {
     pub seq_idx: usize,
 }
 
-impl Process for Seq {
+impl Seq {
     // right now only retriggers samples
     fn process(&mut self, voice: &mut VoiceState) {
         let state = &mut self.state;
