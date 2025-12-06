@@ -27,6 +27,7 @@ use crate::audio_processing::{
 pub struct Conductor {
     voices: HashMap<String, Voice>,
     groups: HashMap<String, Group>,
+    tempo_groups: HashMap<String, Rc<RefCell<TempoState>>>,
     out_channels: usize,
     tracks: HashMap<String, AudioFile>,
 }
@@ -36,6 +37,7 @@ impl Conductor {
         Self { 
             voices: HashMap::<String, Voice>::new(), 
             groups: HashMap::<String, Group>::new(),
+            tempo_groups: HashMap::<String, Rc<RefCell<TempoState>>>::new(),
             out_channels, 
             tracks,
         }
@@ -375,9 +377,9 @@ impl Conductor {
 
                     if u == 'g' {
                         let tg_name = String::from(&t_arg[1..]);
-                        tempo = match self.groups.get(&tg_name) {
-                            Some(group) => {
-                                Rc::clone(&group.state.tempo_state);
+                        tempo = match self.tempo_groups.get(&tg_name) {
+                            Some(tg) => {
+                                Rc::clone(&tg);
                                 continue;
                             }
                             None => {
