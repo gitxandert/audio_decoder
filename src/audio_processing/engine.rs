@@ -1,10 +1,6 @@
 use std::collections::{HashMap, hash_map::Entry};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering}
-};
 
 use alsa_sys::*;
 
@@ -498,7 +494,7 @@ pub struct VoiceState {
 }
 
 pub struct Voice {
-    samples: Arc<Vec<i16>>,
+    samples: Vec<i16>,
     sample_rate: u32,
     channels: usize,
     pub state: VoiceState,  
@@ -518,7 +514,7 @@ impl Voice {
         };
 
         Self {
-            samples: Arc::new(af.samples.clone()),
+            samples: af.samples.clone(),
             sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
             state,
