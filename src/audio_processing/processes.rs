@@ -6,12 +6,13 @@ use crate::audio_processing::{
     gart_time::gart_time::TempoState,
 };
 
-// Processes 
+// Processes
+//
 macro_rules! declare_processes {
-    ( $( $variant:ident => $ty:ty ),* $(,)? ) => {
+    ( $( $variant:ident ),* $(,)? ) => {
         pub enum Process {
             $(
-                $variant($ty),
+                $variant($variant),
             )*
         }
 
@@ -36,7 +37,7 @@ macro_rules! declare_processes {
 }
 
 declare_processes! {
-    Seq => Seq,
+    Seq,
 }
 
 pub struct Seq {
