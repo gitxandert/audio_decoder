@@ -361,7 +361,7 @@ impl Conductor {
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
-        
+
         while let Some(arg) = args.next() {
             match arg {
                 "-t" | "--tempo" => {
@@ -430,17 +430,20 @@ impl Conductor {
                     };
                 }
                 "-s" | "--steps" => {
-                    // need to figure out how to parse numbers
-                    // until next char
-                    while let Some(val) = &args.clone().peekable().peek() {
-                        match val.parse::<f32>() {
-                            Ok(valid) => {
-                                let num = args.next().unwrap();
-                                let num = num.parse::<f32>().unwrap();
-                                steps.push(num);
-                            }
+                    let s_arg = match args.next() {
+                        Some(arg) => arg,
+                        None => {
+                            println!("\nErr: not enough arguments for steps");
+                            return;
+                        }
+                    };
+                    let step_strs: Vec<&str> = s_arg.split(',').collect();
+                    for step in step_strs {
+                        match step.parse::<f32>() {
+                            Ok(val) => steps.push(val),
                             Err(_) => {
-                                continue;
+                                println!("\nErr: invalid argument {step} for steps");
+                                return;
                             }
                         }
                     }
@@ -593,7 +596,7 @@ pub struct GroupState {
 pub struct Group {
     pub state: GroupState, 
     pub voices: HashMap<String, Voice>,
-    // pub processes: HashMap<String, Box<dyn Process>>,
+    // pub processes: HashMap<String, Process>,
 }
 
 impl Group {
@@ -607,7 +610,7 @@ impl Group {
         Self {
             state,
             voices,
-            // processes: HashMap::<String, Box<dyn Process>>::new(),
+            // processes: HashMap::<String, Process>::new(),
         }
     }
 
