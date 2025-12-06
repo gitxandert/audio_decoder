@@ -7,24 +7,36 @@ use crate::audio_processing::{
 };
 
 // Processes 
-//
+macro_rules! declare_processes {
+    ( $( $variant:ident => $ty:ty ),* $(,)? ) => {
+        pub enum Process {
+            $(
+                $variant($ty),
+            )*
+        }
 
-pub enum Process {
-    Seq(Seq),
+        impl Process {
+            pub fn process(&mut self, voice: &mut VoiceState) {
+                match self {
+                    $(
+                        Process::$variant(inner) => inner.process(voice),
+                    )*
+                }
+            }
+
+            pub fn reset(&mut self) {
+                match self {
+                    $(
+                        Process::$variant(inner) => inner.reset(),
+                    )*
+                }
+            }
+        }
+    };
 }
 
-impl Process {
-    pub fn process(&mut self, voice: &mut VoiceState) {
-        match self {
-            Process::Seq(p) => p.process(voice),
-        }
-    }
-
-    pub fn reset(&mut self) {
-        match self {
-            Process::Seq(p) => p.reset(),
-        }
-    }
+declare_processes! {
+    Seq => Seq,
 }
 
 pub struct Seq {
