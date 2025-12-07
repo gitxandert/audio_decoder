@@ -2,9 +2,9 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use crate::audio_processing::{
-    gart_rand::X128P,
+    blast_rand::X128P,
     engine::VoiceState,
-    gart_time::gart_time::TempoState,
+    blast_time::blast_time::TempoState,
 };
 
 // Processes

@@ -1,6 +1,6 @@
-# GART: Generative Audio in Real Time
+# BLAST: Bash-Like Audio Scripting Tool
 
-This project aims to facilitate real-time, generative audio in Rust. It features a Bash-like scripting language that is interpreted by a REPL.
+This project aims to facilitate real-time algorithmic audio in Rust. It features a Bash-like scripting language that is interpreted by a REPL.
 
 ## Dependencies
 

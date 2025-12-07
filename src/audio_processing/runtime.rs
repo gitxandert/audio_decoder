@@ -23,10 +23,10 @@ use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
     engine::{Conductor, Voice},
     commands::{CmdArg, Command, CmdQueue},
-    gart_time::{gart_time::clock, sample_rate},
+    blast_time::{blast_time::clock, sample_rate},
 };
 
-pub fn run_gart(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
+pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
     // initialize audio engine and tracks
     
     let mut conductor = Conductor::prepare(num_channels as usize, tracks);

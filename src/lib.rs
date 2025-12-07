@@ -1,7 +1,7 @@
 pub mod audio_processing;
 pub mod file_parsing;
 
-use audio_processing::runtime::run_gart;
+use audio_processing::runtime::run_blast;
 use file_parsing::decode_helpers::{DecodeResult, DecodeError, AudioFile};
 
 #[cfg(test)]
@@ -18,7 +18,7 @@ mod tests {
             Err(error) => panic!("Error with file"),
         };
 
-        run_gart(vec![af], af.sample_rate, af.num_channels);
+        run_blast(vec![af], af.sample_rate, af.num_channels);
     }
 
     #[test]
@@ -30,6 +30,6 @@ mod tests {
             Err(error) => panic!("{:?}", error),
         };
 
-        run_gart(vec![af], af.sample_rate, af.num_channels);
+        run_blast(vec![af], af.sample_rate, af.num_channels);
     }
 }

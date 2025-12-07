@@ -15,12 +15,12 @@ use crate::audio_processing::{
     processes::{
         Process, Seq, SeqState
     },
-    gart_rand::{
+    blast_rand::{
         X128P, fast_seed
     },
-    gart_time::{
+    blast_time::{
         sample_rate,
-        gart_time::{
+        blast_time::{
             clock, TempoMode, TempoUnit, TempoState
         }
     },

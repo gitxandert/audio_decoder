@@ -1,13 +1,13 @@
 use std::fs;
 use std::collections::{HashMap, hash_map::Entry};
-use gart::{
+use blast::{
     file_parsing::{
         mpeg, aiff, wav,
         decode_helpers::{
             DecodeError, DecodeResult, AudioFile
         },
     },
-    audio_processing::runtime::run_gart,
+    audio_processing::runtime::run_blast,
 };
 
 fn main() -> DecodeResult<()> {
@@ -125,7 +125,7 @@ fn main() -> DecodeResult<()> {
     }
     println!("]");
 
-    run_gart(tracks, mutual_rate, num_channels);
+    run_blast(tracks, mutual_rate, num_channels);
 
     Ok(())
 }
