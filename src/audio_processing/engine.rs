@@ -120,6 +120,8 @@ impl Conductor {
         }
     }
 
+    // expand this to start multiple things at the same time;
+    // maybe implement "all" reserved word
     pub fn start(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let first = match args.next() {
@@ -132,7 +134,7 @@ impl Conductor {
 
         if let Some(second) = args.next() {
             match first {
-                "-v" | "--voice" => self.start_voice(second.to_string()),
+                "-v" | "--voice" => self.parse_start_voice_args(second),
                 "-g" | "--group" => self.start_group(second.to_string()),
                 "-t" | "--tempogroup" => self.start_tg(second.to_string()),
                 _ => {
@@ -143,6 +145,34 @@ impl Conductor {
         } else {
             println!("\nErr: not enough arguments for start");
             return;
+        }
+    }
+
+    // this allows users to specify a voice in a group,
+    // using the format group.voice (e.g. drums.kick)
+    fn parse_start_voice_args(&mut self, args: &str) {
+        let mut args: Vec<&str> = args.split('.').collect();
+        if args.len() > 2 {
+            println!("\nErr: too many delimiters for format group.voice");
+            return;
+        }
+
+        // args will never be 0
+        if args.len() == 1 {
+            let voice = args.get(0).unwrap();
+            self.start_voice(voice.to_string());
+        } else {
+            let group = args.get(0).unwrap();
+            let group = group.to_string();
+            let voice = args.get(1).unwrap();
+
+            match self.groups.get(&group) {
+                Some(g) => self.start_voice(voice.to_string()),
+                None => {
+                    println!("\nErr: couldn't find group '{group}'");
+                    return;
+                }
+            }
         }
     }
 
@@ -172,6 +202,10 @@ impl Conductor {
             Some(group) => {
                 let state = &mut group.state;
                 state.active = true;
+
+                for (_, mut voice) in &mut group.voices {
+                    voice.state.active = true;
+                }
                 
                 let mut ts = state.tempo_state.borrow_mut();
                 if ts.mode == TempoMode::Solo {
@@ -194,7 +228,7 @@ impl Conductor {
                 tg.active = true;
                 tg.reset();
             }
-            none => println!("\nerr: could not find group '{name}'"),
+            None => println!("\nerr: could not find group '{name}'"),
         }
     }
 
