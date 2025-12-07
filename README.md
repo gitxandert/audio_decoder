@@ -21,6 +21,7 @@ One of the goals of this project is to realize as many features as possible with
 - interacts directly with hardware and the DMA buffer for low-latency writes
 - stores commands parsed by the REPL thread into a lock-free command queue for the audio thread
 - uses terminal in raw mode for custom terminal rendering
+- implements fast RNG with xoroshiro128+ generation, Lemire's fast modulo, and architecture-specific seeding
 
 **src/file_parsing**:
 - mpeg
