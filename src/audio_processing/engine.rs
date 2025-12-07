@@ -15,6 +15,9 @@ use crate::audio_processing::{
     processes::{
         Process, Seq, SeqState
     },
+    gart_rand::{
+        X128P, fast_seed
+    },
     gart_time::{
         sample_rate,
         gart_time::{
@@ -362,6 +365,8 @@ impl Conductor {
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
+        // implement user-defined seed l8r
+        let mut rng = X128P::new(fast_seed());
 
         while let Some(arg) = args.next() {
             match arg {
@@ -663,6 +668,7 @@ impl Conductor {
             steps,
             chance,
             jit,
+            rng,
             seq_idx: 0,
         };
 

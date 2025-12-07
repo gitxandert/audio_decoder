@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use crate::audio_processing::{
+    gart_rand::X128P,
     engine::VoiceState,
     gart_time::gart_time::TempoState,
 };
@@ -51,6 +52,7 @@ pub struct SeqState {
     pub steps: Vec<f32>,
     pub chance: Vec<f32>,
     pub jit: Vec<f32>,
+    pub rng: X128P, // implement user-defined seed ASP
     pub seq_idx: usize,
 }
 
