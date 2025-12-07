@@ -52,9 +52,9 @@ impl Conductor {
         match cmd {
             CmdArg::Load => self.load_voice(args),
             CmdArg::Start => self.start(args),
-            CmdArg::Pause => self.pause_voice(args),
-            CmdArg::Resume => self.resume_voice(args),
-            CmdArg::Stop => self.stop_voice(args),
+            CmdArg::Pause => self.pause(args),
+            CmdArg::Resume => self.resume(args),
+            CmdArg::Stop => self.stop(args),
             CmdArg::Unload => self.unload_voice(args),
             CmdArg::Velocity => self.velocity(args),
             CmdArg::Group => self.group(args),
@@ -116,7 +116,7 @@ impl Conductor {
                     }
                 }
             }
-            None => println!("\nErr: Could not find track '{name}'"),
+            None => println!("\nErr: Couldn't find track '{name}'"),
         }
     }
 
@@ -193,7 +193,7 @@ impl Conductor {
                     false => state.end as f32,
                 };
             }
-            None => println!("\nErr: Could not find voice '{name}'"),
+            None => println!("\nErr: Couldn't find voice '{name}'"),
         }
     }
 
@@ -213,7 +213,7 @@ impl Conductor {
                     ts.reset();
                 } else {
                     if ts.active == false {
-                        println!("\nwarn: TempoGroup not active for '{name}'");
+                        println!("\nWarn: TempoGroup not active for '{name}'");
                     }
                 }
             }
@@ -228,11 +228,63 @@ impl Conductor {
                 tg.active = true;
                 tg.reset();
             }
-            None => println!("\nerr: could not find group '{name}'"),
+            None => println!("\nerr: could not find TempoGroup '{name}'"),
         }
     }
 
-    pub fn pause_voice(&mut self, name: String) {
+    pub fn pause(&mut self, args: String) {
+        let mut args = args.split_whitespace();
+        let first = match args.next() {
+            Some(string) => string,
+            None => {
+                println!("\nErr: Not enough arguments for pause");
+                return;
+            }
+        };
+
+        if let Some(second) = args.next() {
+            match first {
+                "-v" | "--voice" => self.parse_pause_voice_args(second),
+                "-g" | "--group" => self.pause_group(second.to_string()),
+                "-t" | "--tempogroup" => self.pause_tg(second.to_string()),
+                _ => {
+                    println!("\nErr: invalid argument {first} for pause");
+                    return;
+                }
+            }
+        } else {
+            println!("\nErr: not enough arguments for pause");
+            return;
+        }
+    }
+
+    fn parse_pause_voice_args(&mut self, args: &str) {
+        let mut args: Vec<&str> = args.split('.').collect();
+        if args.len() > 2 {
+            println!("\nErr: too many delimiters for format group.voice");
+            return;
+        }
+
+        // args will never be 0
+        if args.len() == 1 {
+            let voice = args.get(0).unwrap();
+            self.pause_voice(voice.to_string());
+        } else {
+            let group = args.get(0).unwrap();
+            let group = group.to_string();
+            let voice = args.get(1).unwrap();
+
+            match self.groups.get(&group) {
+                Some(g) => self.pause_voice(voice.to_string()),
+                None => {
+                    println!("\nErr: couldn't find group '{group}'");
+                    return;
+                }
+            }
+        }
+    }
+
+    fn pause_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 voice.state.active = false;
@@ -241,11 +293,92 @@ impl Conductor {
                     ts.active = false;
                 }
             }
-            None => println!("\nErr: Could not find voice '{name}'"),
+            None => println!("\nErr: Couldn't find voice '{name}'"),
         }
     }
 
-    pub fn resume_voice(&mut self, name: String) {
+    fn pause_group(&mut self, name: String) {
+        match self.groups.get_mut(&name) {
+            Some(group) => {
+                let state = &mut group.state;
+                state.active = false;
+
+                for (_, mut voice) in &mut group.voices {
+                    voice.state.active = false;
+                }
+                
+                let mut ts = state.tempo_state.borrow_mut();
+                if ts.mode == TempoMode::Solo {
+                    ts.active = false;
+                }
+            }
+            None => println!("\nErr: Couldn't find group '{name}'"),
+        }
+    }
+    
+    fn pause_tg(&mut self, name: String) {
+        match self.tempo_groups.get_mut(&name) {
+            Some(tempo_group) => {
+                let mut tg = tempo_group.borrow_mut();
+                tg.active = false;
+            }
+            None => println!("\nErr: Couldn't find TempoGroup '{name}'"),
+        }
+    }
+
+    pub fn resume(&mut self, args: String) {
+        let mut args = args.split_whitespace();
+        let first = match args.next() {
+            Some(string) => string,
+            None => {
+                println!("\nErr: Not enough arguments for resume");
+                return;
+            }
+        };
+
+        if let Some(second) = args.next() {
+            match first {
+                "-v" | "--voice" => self.parse_resume_voice_args(second),
+                "-g" | "--group" => self.resume_group(second.to_string()),
+                "-t" | "--tempogroup" => self.resume_tg(second.to_string()),
+                _ => {
+                    println!("\nErr: invalid argument {first} for resume");
+                    return;
+                }
+            }
+        } else {
+            println!("\nErr: not enough arguments for resume");
+            return;
+        }
+    }
+
+    fn parse_resume_voice_args(&mut self, args: &str) {
+        let mut args: Vec<&str> = args.split('.').collect();
+        if args.len() > 2 {
+            println!("\nErr: too many delimiters for format group.voice");
+            return;
+        }
+
+        // args will never be 0
+        if args.len() == 1 {
+            let voice = args.get(0).unwrap();
+            self.resume_voice(voice.to_string());
+        } else {
+            let group = args.get(0).unwrap();
+            let group = group.to_string();
+            let voice = args.get(1).unwrap();
+
+            match self.groups.get(&group) {
+                Some(g) => self.resume_voice(voice.to_string()),
+                None => {
+                    println!("\nErr: Couldn't find group '{group}'");
+                    return;
+                }
+            }
+        }
+    }
+
+    fn resume_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
@@ -255,23 +388,96 @@ impl Conductor {
                     ts.active = true;
                 }
             }
-            None => println!("\nErr: Could not find voice '{name}'"),
+            None => println!("\nErr: Couldn't find voice '{name}'"),
         }
     }
 
-    /* TODO: turn loop into a Process
-    fn loop_voice(&mut self, name: &str) {
-        for voice in &mut self.voices {
-            if voice.name == name {
-                voice._loop = true;
+    fn resume_group(&mut self, name: String) {
+        match self.groups.get_mut(&name) {
+            Some(group) => {
+                let state = &mut group.state;
+                state.active = true;
+
+                for (_, mut voice) in &mut group.voices {
+                    voice.state.active = true;
+                }
+                
+                let mut ts = state.tempo_state.borrow_mut();
+                if ts.mode == TempoMode::Solo {
+                    ts.active = true;
+                } else {
+                    if ts.active == false {
+                        println!("\nWarn: TempoGroupnot active for {name}");
+                    }
+                }
+            }
+            None => println!("\nErr: Couldn't find group '{name}'"),
+        }
+    }
+ 
+    fn resume_tg(&mut self, name: String) {
+        match self.tempo_groups.get_mut(&name) {
+            Some(tempo_group) => {
+                let mut tg = tempo_group.borrow_mut();
+                tg.active = true;
+            }
+            None => println!("\nErr: Couldn't find TempoGroup '{name}'"),
+        }
+    }
+
+    pub fn stop(&mut self, args: String) {
+        let mut args = args.split_whitespace();
+        let first = match args.next() {
+            Some(string) => string,
+            None => {
+                println!("\nErr: Not enough arguments for stop");
                 return;
             }
-        }
-        println!("\nErr: Could not find voice '{name}'");
-    }
-    */
+        };
 
-    pub fn stop_voice(&mut self, name: String) {
+        if let Some(second) = args.next() {
+            match first {
+                "-v" | "--voice" => self.parse_stop_voice_args(second),
+                "-g" | "--group" => self.stop_group(second.to_string()),
+                "-t" | "--tempogroup" => self.stop_tg(second.to_string()),
+                _ => {
+                    println!("\nErr: invalid argument {first} for stop");
+                    return;
+                }
+            }
+        } else {
+            println!("\nErr: not enough arguments for stop");
+            return;
+        }
+    }
+
+    fn parse_stop_voice_args(&mut self, args: &str) {
+        let mut args: Vec<&str> = args.split('.').collect();
+        if args.len() > 2 {
+            println!("\nErr: too many delimiters for format group.voice");
+            return;
+        }
+
+        // args will never be 0
+        if args.len() == 1 {
+            let voice = args.get(0).unwrap();
+            self.stop_voice(voice.to_string());
+        } else {
+            let group = args.get(0).unwrap();
+            let group = group.to_string();
+            let voice = args.get(1).unwrap();
+
+            match self.groups.get(&group) {
+                Some(g) => self.stop_voice(voice.to_string()),
+                None => {
+                    println!("\nErr: Couldn't find group '{group}'");
+                    return;
+                }
+            }
+        }
+    }
+
+    fn stop_voice(&mut self, name: String) {
         match self.voices.get_mut(&name) {
             Some(voice) => {
                 let state = &mut voice.state;
@@ -291,14 +497,57 @@ impl Conductor {
                     false => state.end as f32,
                 };
             }
-            None => println!("\nErr: Could not find voice '{name}'"),
+            None => println!("\nErr: Couldn't find voice '{name}'"),
         }
     }
+
+    fn stop_group(&mut self, name: String) {
+        match self.groups.get_mut(&name) {
+            Some(group) => {
+                let state = &mut group.state;
+                state.active = false;
+
+                for (_, mut voice) in &mut group.voices {
+                    voice.state.active = false;
+                }
+                
+                let mut ts = state.tempo_state.borrow_mut();
+                if ts.mode == TempoMode::Solo {
+                    ts.active = false;
+                    ts.reset();
+                }
+            }
+            None => println!("\nErr: Couldn't find group '{name}'"),
+        }
+    }
+ 
+    fn stop_tg(&mut self, name: String) {
+        match self.tempo_groups.get_mut(&name) {
+            Some(tempo_group) => {
+                let mut tg = tempo_group.borrow_mut();
+                tg.active = false;
+                tg.reset();
+            }
+            None => println!("\nErr: Couldn't find TempoGroup '{name}'"),
+        }
+    }
+
+    /* TODO: turn loop into a Process
+    fn loop_voice(&mut self, name: &str) {
+        for voice in &mut self.voices {
+            if voice.name == name {
+                voice._loop = true;
+                return;
+            }
+        }
+        println!("\nErr: Couldn't find voice '{name}'");
+    }
+    */
 
     pub fn unload_voice(&mut self, name: String) {
         match self.voices.entry(name) {
             Entry::Vacant(_) => {
-                println!("\nErr: Could not find voice");
+                println!("\nErr: Couldn't find voice");
                 return;
             }
             Entry::Occupied(e) => { e.remove(); }
@@ -319,7 +568,7 @@ impl Conductor {
         let voice = match self.voices.get_mut(&name) {
             Some(v) => v,
             None => {
-                println!("\nErr: Could not find voice '{name}'");
+                println!("\nErr: Couldn't find voice '{name}'");
                 return;
             }
         };
@@ -371,7 +620,7 @@ impl Conductor {
                 match self.tempo_groups.get(&name.to_string()) {
                     Some(tg) => tempo_state = Rc::clone(tg),
                     None => {
-                        println!("\nErr: Could not find TempoGroup named {tg_name}");
+                        println!("\nErr: Couldn't find TempoGroup named {tg_name}");
                         return;
                     }
                 }
@@ -500,7 +749,7 @@ impl Conductor {
         let voice = match self.voices.get_mut(&name) {
             Some(v) => v,
             None => {
-                println!("\nErr: Could not find voice '{name}'");
+                println!("\nErr: Couldn't find voice '{name}'");
                 return;
             }
         };
@@ -524,10 +773,10 @@ impl Conductor {
                         }
                     };
 
-                    let u = t_arg.chars().next().unwrap();
+                    let u = &t_arg[0..=1];
 
-                    if u == 'g' {
-                        let tg_name = String::from(&t_arg[1..]);
+                    if u == "g:" {
+                        let tg_name = String::from(&t_arg[2..]);
                         tempo = match self.tempo_groups.get(&tg_name) {
                             Some(tg) => {
                                 Rc::clone(&tg);
@@ -541,16 +790,16 @@ impl Conductor {
                     }
                     
                     let unit = match u {
-                        's' => TempoUnit::Samples,
-                        'm' => TempoUnit::Millis,
-                        'b' => TempoUnit::Bpm,
+                        "s:" => TempoUnit::Samples,
+                        "m:" => TempoUnit::Millis,
+                        "b:" => TempoUnit::Bpm,
                         _ => {
                             println!("\nErr: unrecognized time unit for tempo");
                             return;
                         }
                     };
 
-                    let interval = match &t_arg[1..].parse::<f32>() {
+                    let interval = match &t_arg[2..].parse::<f32>() {
                         Ok(val) => *val,
                         Err(_) => {
                             println!("\nErr: invalid tempo interval");
