@@ -59,7 +59,7 @@ pub mod blast_time {
         pub current: u32,
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub enum TempoMode {
         Solo,
         Group,
