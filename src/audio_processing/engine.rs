@@ -105,7 +105,7 @@ impl Conductor {
         }
     }
 
-    pub fn load_voice(&mut self, name: String) {
+    fn load_voice(&mut self, name: String) {
         match self.tracks.get(&name) {
             Some(track) => {
                 match self.voices.entry(name.to_string()) {
@@ -122,7 +122,7 @@ impl Conductor {
 
     // expand this to start multiple things at the same time;
     // maybe implement "all" reserved word
-    pub fn start(&mut self, args: String) {
+    fn start(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let first = match args.next() {
             Some(string) => string,
@@ -232,7 +232,7 @@ impl Conductor {
         }
     }
 
-    pub fn pause(&mut self, args: String) {
+    fn pause(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let first = match args.next() {
             Some(string) => string,
@@ -326,7 +326,7 @@ impl Conductor {
         }
     }
 
-    pub fn resume(&mut self, args: String) {
+    fn resume(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let first = match args.next() {
             Some(string) => string,
@@ -425,7 +425,7 @@ impl Conductor {
         }
     }
 
-    pub fn stop(&mut self, args: String) {
+    fn stop(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let first = match args.next() {
             Some(string) => string,
@@ -544,7 +544,7 @@ impl Conductor {
     }
     */
 
-    pub fn unload_voice(&mut self, name: String) {
+    fn unload_voice(&mut self, name: String) {
         match self.voices.entry(name) {
             Entry::Vacant(_) => {
                 println!("\nErr: Couldn't find voice");
@@ -554,7 +554,7 @@ impl Conductor {
         }
     }
 
-    pub fn velocity(&mut self, args: String) {
+    fn velocity(&mut self, args: String) {
         let mut args = args.splitn(2, ' ');
         let name = match args.next() {
             Some(string) => string,
@@ -598,7 +598,7 @@ impl Conductor {
         }        
     }
 
-    pub fn group(&mut self, args: String) {
+    fn group(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let name = match args.next() {
             Some(string) => string,
@@ -694,7 +694,7 @@ impl Conductor {
         self.groups.insert(name.to_string(), group);        
     }
 
-    pub fn tempo_group(&mut self, args: String) {
+    fn tempo_group(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let name = match args.next() {
             Some(string) => string,
@@ -735,7 +735,7 @@ impl Conductor {
         self.tempo_groups.insert(name.to_string(), tempo_state);
     }
 
-    pub fn seq(&mut self, args: String) {
+    fn seq(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let name = match args.next() {
             Some(string) => string,
