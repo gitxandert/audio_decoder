@@ -69,10 +69,13 @@ impl Seq {
         let current = tempo.current() % state.period as f32;
 
         if current == state.steps[state.seq_idx] {
-            voice.position = match voice.velocity >= 0.0 {
-                true => 0.0,
-                false => voice.end as f32,
-            };
+            let rand = state.rng.next_i64_range(0, 100);
+            if rand < state.chance[state.seq_idx] as i64 {
+                voice.position = match voice.velocity >= 0.0 {
+                    true => 0.0,
+                    false => voice.end as f32,
+                };
+            }
             state.seq_idx += 1;
             state.seq_idx %= state.steps.len();
         }

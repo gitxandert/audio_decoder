@@ -659,8 +659,6 @@ impl Conductor {
             }
         }
 
-        println!("chance = {:?}", chance);
-
         let state = SeqState {
             active: true,
             period,
