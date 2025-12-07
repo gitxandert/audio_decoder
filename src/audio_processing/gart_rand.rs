@@ -47,14 +47,14 @@ impl X128P {
         self.next_f64() as f32
     }
 
-    pub fn next_u64_range(&mut self, lower: u64, upper: u64) -> u64 {
+    pub fn next_i64_range(&mut self, lower: i64, upper: i64) -> i64 {
         let r = self.next_u64();
-        let mut range = match upper > lower {
-            true => upper - lower,
-            false => lower - upper,
+        let mut range: u64 = match upper > lower {
+            true => (upper - lower).try_into().unwrap(),
+            false => (lower - upper).try_into().unwrap(),
         };
         
-        let val = ((r as u128 * range as u128) >> 64) as u64;
+        let val = ((r as u128 * range as u128) >> 64) as i64;
         lower + val
     }
 }
