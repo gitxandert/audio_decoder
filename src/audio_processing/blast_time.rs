@@ -63,6 +63,8 @@ pub mod blast_time {
     pub enum TempoMode {
         Solo,
         Group,
+        // Default? This way, Voices can switch between
+        //// their own or a Group (not TempoGroup) tempo
     }
 
     #[derive(Clone, Debug)]
