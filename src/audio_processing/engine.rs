@@ -740,27 +740,18 @@ impl Conductor {
             }
         };
 
-        let mut v_arg = |v: &str, current: Rc<RefCell<TempoState>>| -> Result<Rc<RefCell<TempoState>>, &'static str> {
+        let mut v_arg = |v: &str| -> Result<(), &'static str> {
             let names: Vec<_> = v.split(',').collect();
             
             for name in names {
                 let name = name.to_string();
                 match self.voices.remove(&name) {
-                    Some(mut voice) => {
-                        // if the Voice wasn't assigned a TempoState at birth,
-                        // it takes on the TempoState of the Group
-                        // (this is how a Voice's Process is synced with a Group's TempoState
-                        // [by proxy, if the Process refers to its Voice's TempoState])
-                        if voice.state.tempo.borrow().mode == TempoMode::TBD {
-                            voice.state.tempo = Rc::clone(&current);
-                        }
-                        voices.insert(name, voice);
-                    }
+                    Some(voice) => voices.insert(name, voice),
                     None => return Err("\nErr: couldn't find Voice")
                 };
             }
 
-            return Ok(current);
+            return Ok(());
         };
 
         while let Some(arg) = args.next() {
@@ -782,8 +773,8 @@ impl Conductor {
                 "-v" | "--voices" => {
                     match args.next() {
                         Some(v) => {
-                            tempo_state = match v_arg(v, tempo_state) {
-                                Ok(state) => state,
+                            match v_arg(v) {
+                                Ok(()) => (),
                                 Err(err) => { println!("{err}"); return; }
                             }
                         }
@@ -800,6 +791,16 @@ impl Conductor {
             }
         }
 
+        for (_, voice) in &mut voices {
+            // if the Voice wasn't assigned a TempoState at birth,
+            // it takes on the TempoState of the Group
+            // (this is how a Voice's Process is synced with a Group's TempoState
+            // [by proxy, if the Process refers to its Voice's TempoState])
+            if voice.state.tempo.borrow().mode == TempoMode::TBD {
+                voice.state.tempo = Rc::clone(&tempo_state);
+            }
+        }
+        
         let group = Group::new(voices, tempo_state);
 
         self.groups.insert(name.to_string(), group);
