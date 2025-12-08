@@ -68,9 +68,11 @@ pub mod blast_time {
         Solo,
         Context,
         Group,
+        TBD, // used by Voices and Groups;
+             // Voices use this as a way to refer to a Group TempoState
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub enum TempoUnit {
         Samples,
         Millis,
@@ -80,7 +82,8 @@ pub mod blast_time {
     impl TempoState {
         pub fn new() -> Self {
             Self {
-                mode: TempoMode::Solo,
+                // if mode is not provided (through init()), then it may change
+                mode: TempoMode::TBD,
                 unit: TempoUnit::Samples,
                 interval: sample_rate::get() as f32,
                 active: false,
