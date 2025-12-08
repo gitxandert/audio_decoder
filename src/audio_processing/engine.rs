@@ -31,7 +31,7 @@ use crate::audio_processing::{
 pub struct Conductor {
     voices: HashMap<String, Voice>,
     groups: HashMap<String, Group>,
-    tempo_groups: HashMap<String, Rc<RefCell<TempoState>>>,
+    tempo_cons: HashMap<String, Rc<RefCell<TempoState>>>,
     out_channels: usize,
     tracks: HashMap<String, AudioFile>,
 }
@@ -41,7 +41,7 @@ impl Conductor {
         Self { 
             voices: HashMap::<String, Voice>::new(), 
             groups: HashMap::<String, Group>::new(),
-            tempo_groups: HashMap::<String, Rc<RefCell<TempoState>>>::new(),
+            tempo_cons: HashMap::<String, Rc<RefCell<TempoState>>>::new(),
             out_channels, 
             tracks,
         }
@@ -58,7 +58,7 @@ impl Conductor {
             CmdArg::Unload => self.unload_voice(args),
             CmdArg::Velocity => self.velocity(args),
             CmdArg::Group => self.group(args),
-            CmdArg::TempoGroup => self.tempo_group(args),
+            CmdArg::TempoContext => self.tempo_context(args),
             CmdArg::Seq => self.seq(args),
             CmdArg::Quit => {
                 unsafe {
@@ -136,7 +136,7 @@ impl Conductor {
             match first {
                 "-v" | "--voice" => self.parse_start_voice_args(second),
                 "-g" | "--group" => self.start_group(second.to_string()),
-                "-t" | "--tempogroup" => self.start_tg(second.to_string()),
+                "-t" | "--tempogroup" => self.start_tc(second.to_string()),
                 _ => {
                     println!("\nErr: invalid argument {first} for start");
                     return;
@@ -221,14 +221,14 @@ impl Conductor {
         }
     }
 
-    fn start_tg(&mut self, name: String) {
-        match self.tempo_groups.get_mut(&name) {
-            Some(tempo_group) => {
-                let mut tg = tempo_group.borrow_mut();
-                tg.active = true;
-                tg.reset();
+    fn start_tc(&mut self, name: String) {
+        match self.tempo_cons.get_mut(&name) {
+            Some(tempo_con) => {
+                let mut tc = tempo_con.borrow_mut();
+                tc.active = true;
+                tc.reset();
             }
-            None => println!("\nerr: could not find TempoGroup '{name}'"),
+            None => println!("\nerr: could not find TempoContext '{name}'"),
         }
     }
 
@@ -246,7 +246,7 @@ impl Conductor {
             match first {
                 "-v" | "--voice" => self.parse_pause_voice_args(second),
                 "-g" | "--group" => self.pause_group(second.to_string()),
-                "-t" | "--tempogroup" => self.pause_tg(second.to_string()),
+                "-t" | "--tempogroup" => self.pause_tc(second.to_string()),
                 _ => {
                     println!("\nErr: invalid argument {first} for pause");
                     return;
@@ -316,13 +316,13 @@ impl Conductor {
         }
     }
     
-    fn pause_tg(&mut self, name: String) {
-        match self.tempo_groups.get_mut(&name) {
-            Some(tempo_group) => {
-                let mut tg = tempo_group.borrow_mut();
-                tg.active = false;
+    fn pause_tc(&mut self, name: String) {
+        match self.tempo_cons.get_mut(&name) {
+            Some(tempo_con) => {
+                let mut tc = tempo_con.borrow_mut();
+                tc.active = false;
             }
-            None => println!("\nErr: Couldn't find TempoGroup '{name}'"),
+            None => println!("\nErr: Couldn't find TempoContext '{name}'"),
         }
     }
 
@@ -340,7 +340,7 @@ impl Conductor {
             match first {
                 "-v" | "--voice" => self.parse_resume_voice_args(second),
                 "-g" | "--group" => self.resume_group(second.to_string()),
-                "-t" | "--tempogroup" => self.resume_tg(second.to_string()),
+                "-t" | "--tempogroup" => self.resume_tc(second.to_string()),
                 _ => {
                     println!("\nErr: invalid argument {first} for resume");
                     return;
@@ -415,13 +415,13 @@ impl Conductor {
         }
     }
  
-    fn resume_tg(&mut self, name: String) {
-        match self.tempo_groups.get_mut(&name) {
-            Some(tempo_group) => {
-                let mut tg = tempo_group.borrow_mut();
-                tg.active = true;
+    fn resume_tc(&mut self, name: String) {
+        match self.tempo_cons.get_mut(&name) {
+            Some(tempo_con) => {
+                let mut tc = tempo_con.borrow_mut();
+                tc.active = true;
             }
-            None => println!("\nErr: Couldn't find TempoGroup '{name}'"),
+            None => println!("\nErr: Couldn't find TempoContext '{name}'"),
         }
     }
 
@@ -439,7 +439,7 @@ impl Conductor {
             match first {
                 "-v" | "--voice" => self.parse_stop_voice_args(second),
                 "-g" | "--group" => self.stop_group(second.to_string()),
-                "-t" | "--tempogroup" => self.stop_tg(second.to_string()),
+                "-t" | "--tempogroup" => self.stop_tc(second.to_string()),
                 _ => {
                     println!("\nErr: invalid argument {first} for stop");
                     return;
@@ -521,14 +521,14 @@ impl Conductor {
         }
     }
  
-    fn stop_tg(&mut self, name: String) {
-        match self.tempo_groups.get_mut(&name) {
-            Some(tempo_group) => {
-                let mut tg = tempo_group.borrow_mut();
-                tg.active = false;
-                tg.reset();
+    fn stop_tc(&mut self, name: String) {
+        match self.tempo_cons.get_mut(&name) {
+            Some(tempo_con) => {
+                let mut tc = tempo_con.borrow_mut();
+                tc.active = false;
+                tc.reset();
             }
-            None => println!("\nErr: Couldn't find TempoGroup '{name}'"),
+            None => println!("\nErr: Couldn't find TempoCon '{name}'"),
         }
     }
 
@@ -615,12 +615,12 @@ impl Conductor {
 
         let mut t_arg = |t: &str| {
             let u_str = &t[0..=1];
-            if u_str == "g:" {
-                let tg_name = &t[2..];
-                match self.tempo_groups.get(&name.to_string()) {
-                    Some(tg) => tempo_state = Rc::clone(tg),
+            if u_str == "c:" {
+                let tc_name = &t[2..];
+                match self.tempo_cons.get(&name.to_string()) {
+                    Some(tc) => tempo_state = Rc::clone(tc),
                     None => {
-                        println!("\nErr: Couldn't find TempoGroup named {tg_name}");
+                        println!("\nErr: Couldn't find TempoContext named {tc_name}");
                         return;
                     }
                 }
@@ -694,12 +694,12 @@ impl Conductor {
         self.groups.insert(name.to_string(), group);        
     }
 
-    fn tempo_group(&mut self, args: String) {
+    fn tempo_context(&mut self, args: String) {
         let mut args = args.split_whitespace();
         let name = match args.next() {
             Some(string) => string,
             None => {
-                println!("\nErr: not enough arguments for tempogroup");
+                println!("\nErr: not enough arguments for tempocon/tc");
                 return;
             }
         };
@@ -707,7 +707,7 @@ impl Conductor {
         let tempo = match args.next() {
             Some(string) => string,
             None => {
-                println!("\nErr: not enough arguments for tempogroup");
+                println!("\nErr: not enough arguments for tempocon/tc");
                 return;
             }
         };
@@ -731,8 +731,8 @@ impl Conductor {
         };
 
         let tempo_state = Rc::new(RefCell::new(TempoState::new()));
-        tempo_state.borrow_mut().init(TempoMode::Group, unit, interval);
-        self.tempo_groups.insert(name.to_string(), tempo_state);
+        tempo_state.borrow_mut().init(TempoMode::Context, unit, interval);
+        self.tempo_cons.insert(name.to_string(), tempo_state);
     }
 
     fn seq(&mut self, args: String) {
@@ -775,15 +775,15 @@ impl Conductor {
 
                     let u = &t_arg[0..=1];
 
-                    if u == "g:" {
-                        let tg_name = String::from(&t_arg[2..]);
-                        tempo = match self.tempo_groups.get(&tg_name) {
-                            Some(tg) => {
-                                Rc::clone(&tg);
+                    if u == "c:" {
+                        let tc_name = String::from(&t_arg[2..]);
+                        tempo = match self.tempo_cons.get(&tc_name) {
+                            Some(tc) => {
+                                Rc::clone(tc);
                                 continue;
                             }
                             None => {
-                                println!("\nErr: no TempoGroup with the provided name");
+                                println!("\nErr: no TempoContext with the name {tc_name}");
                                 return;
                             }
                         };

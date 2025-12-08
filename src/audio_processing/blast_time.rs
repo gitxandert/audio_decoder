@@ -36,16 +36,20 @@ pub mod blast_time {
     }
     // tempo control
     // 
-    // processes that rely on temporal parameters
-    // can be assigned to a TempoGroup to synchronize with others
-    // or to a TempoSolo to be in their own little time world
+    // a Process that relies on temporal parameters can be assigned
+    // a TempoSolo to function at its own pace,
+    // a TempoContext to synchronize with other separate Processes,
+    // or a TempoGroup to default to the TempoState of the Group to which it
+    //// would be assigned
     //
-    // a TempoGroups is created by a special command (TBD);
-    // a TempoSolo is created along with the Process that requires it
+    // a TempoContext is created by a special command (tempocon/tc);
+    // a TempoSolo is created along with the Process that instantiates it;
+    // a TempoGroup is created along with the Group that instantiates it
     //
-    // a TempoGroup has a name that can be assigned to a Process
+    // a TempoContext has a name that can be assigned to a Process or Group
     //
-    // all TempoStates are updated by the Conductor
+    // all TempoContexts are updated by the Conductor;
+    // TempoSolos are updated by Voices, TempoGroups updated by Groups
     //
     // interval is stored as samples, but converted from
     // samples, milliseconds, or BPM, depending on initialization
@@ -62,9 +66,8 @@ pub mod blast_time {
     #[derive(Clone, Debug, PartialEq)]
     pub enum TempoMode {
         Solo,
+        Context,
         Group,
-        // Default? This way, Voices can switch between
-        //// their own or a Group (not TempoGroup) tempo
     }
 
     #[derive(Clone, Debug)]
