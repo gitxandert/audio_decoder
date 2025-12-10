@@ -119,3 +119,82 @@ impl Command {
         (self.cmd, self.args.clone())
     }
 }
+
+// need to process commands outside of the audio thread
+
+use crate::audio_processing::{
+    blast_time::blast_time::{TempoMode, TempoUnit, TempoState},
+};
+
+struct TrackRepr {
+    idx: usize,
+    file_name: String,
+    format: String,
+    sample_rate: u32,
+    num_channels: u32,
+    bits_per_sample: u32,
+    // don't need the samples
+}
+
+struct TempoRepr { 
+    idx: usize,
+    mode: TempoMode,
+    unit: TempoUnit,
+    interval: f32,
+    active: bool,
+    current: u32,
+}
+
+struct VoiceRepr {
+    idx: usize,
+    active: bool,
+    pos: f32,
+    end: usize,
+    vel: f32,
+    gain: f32,
+    tempo: TempoRepr,
+    sr: u32,
+    channels: usize,
+    processes: HashMap<String, ProcRepr>,
+    // don't need a representation of the proc_tempi
+    // because those are in a Vec and only referenced by
+    // the Processes themselves, and since Processes can't be
+    // parsed outside of the engine (currently), figuring out
+    // the proc_tempi state is just something the engine will handle
+}
+
+struct ProcRepr {
+    // Processes are difficult to represent because they all
+    // differ, so can only represent info that applies
+    // to all Processes
+    //
+    idx: usize, // index of the Process in its owner's
+                // Vec<Process>
+
+    owner_idx: usize, // index of the Process's $owner
+                      // in the engine's Vec<$owner>
+    
+    // this is all I can think of rn
+}
+
+struct GroupRepr {
+    idx: usize,
+    active: bool,
+    gain: f32,
+    tempo: TempoRepr,
+    voices: HashMap<String, VoiceRepr>,
+}
+
+// keeps track of all entities' states
+struct EngineState {
+    tracks: HashMap<String, TrackRepr>,
+    voices: HashMap<String, VoiceRepr>,
+    groups: HashMap<String, GroupRepr>,
+    tempo_cons: HashMap<String, TempoRepr>,
+}
+
+// and formats commands for the engine
+// (handles string allocations, integer/float parsing, etc)
+struct CmdProcessor {
+    engine_state: EngineState,
+}
