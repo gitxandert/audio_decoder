@@ -22,13 +22,17 @@ use std::{
 use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
     engine::{Conductor, Voice},
-    commands::{CmdArg, Command, CmdQueue},
+    commands::{
+        CmdArg, CmdQueue, CmdProcessor,
+        Command, EngineState,
+    },
     blast_time::{blast_time::clock, sample_rate},
 };
 
 pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
-    // initialize audio engine and tracks
-    
+    // initialize audio engine and engine state
+    let tracks_for_state = tracks.clone().into_values().collect();
+    let mut engine_state = EngineState::new(tracks_for_state, num_channels as usize);
     let mut conductor = Conductor::prepare(num_channels as usize, tracks);
 
     sample_rate::set(sample_rate);
@@ -116,13 +120,17 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
  
     raw_mode("on");
 
+    // create command queue between command and audio threads
+    // and intialize the command processor with engine state
+    // (just tracks for now)
     let queue = Arc::new(CmdQueue::new(256));
+    let mut cmd_processor = CmdProcessor::new(engine_state);
     // REPL
     println!("");
     {
         let buffer = buffer.clone();
         let cursor = cursor.clone();
-        let q = queue.clone();
+        let queue = queue.clone();
 
         let mut cmd_history = Vec::<String>::new();
         let mut cmd_idx = cmd_history.len();
@@ -144,22 +152,20 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                         cmd_history.push(cmd.clone());
                         cmd_idx = cmd_history.len();
 
-                        let mut parts = cmd.splitn(2, ' ');
-                        let cmd = parts.next().unwrap();
-                        let args = parts.next().unwrap_or_else(|| "").to_string();
-
-                        if let Some(matched) = q.match_cmd(cmd) {
-                            let command = Command::new(matched, args);
-                            match q.try_push(command) {
-                                Ok(()) => (),
-                                Err(error) => {
-                                    buf.clear();
-                                    println!("\nErr: {error}");
+                        match cmd_processor.parse(cmd) {
+                            Ok(valid) => {
+                                match queue.try_push(valid) {
+                                    Ok(()) => (),
+                                    Err(error) => {
+                                        buf.clear();
+                                        println!("\nErr: {error}");
+                                    }
                                 }
                             }
-                        } else {
-                            buf.clear();
-                            println!("\nUnknown command '{}'", cmd);
+                            Err(error) => {
+                                buf.clear();
+                                println!("\nErr: {error}");
+                            }
                         }
 
                         buf.clear();
@@ -350,7 +356,6 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
                 // mmap begin
                 let r = snd_pcm_mmap_begin(handle, &mut areas_ptr, &mut offset, &mut frames);
-
                 if r == -EAGAIN {
                     break; // hardware not ready
                 }
