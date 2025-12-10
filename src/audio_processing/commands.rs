@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::file_parsing::decode_helpers::AudioFile;
+
 pub struct CmdQueue {
     buf: Vec<UnsafeCell<Option<Command>>>,
     cap: usize,
@@ -59,23 +61,6 @@ impl CmdQueue {
         self.tail.store((tail + 1) % self.cap, Ordering::Release);
         
         cmd
-    }
-
-    pub fn match_cmd(&self, cmd: &str) -> Option<CmdArg> {
-        match cmd {
-            "load" => Some(CmdArg::Load),
-            "start" => Some(CmdArg::Start),
-            "pause" => Some(CmdArg::Pause),
-            "resume" => Some(CmdArg::Resume),
-            "stop" => Some(CmdArg::Stop),
-            "unload" => Some(CmdArg::Unload),
-            "velocity" => Some(CmdArg::Velocity),
-            "group" => Some(CmdArg::Group),
-            "tc" | "tempocon" => Some(CmdArg::TempoContext),
-            "seq" => Some(CmdArg::Seq),
-            "q" | "quit" => Some(CmdArg::Quit),
-            _ => None,
-        }
     }
 }
 
@@ -136,6 +121,19 @@ struct TrackRepr {
     // don't need the samples
 }
 
+impl TrackRepr {
+    fn new(idx: usize, af: AudioFile) -> Self {
+        Self {
+            idx,
+            file_name: af.file_name,
+            format: af.format,
+            sample_rate: af.sample_rate,
+            num_channels: af.num_channels,
+            bits_per_sample: af.bits_per_sample,
+        }
+    }
+}
+
 struct TempoRepr { 
     idx: usize,
     mode: TempoMode,
@@ -186,15 +184,67 @@ struct GroupRepr {
 }
 
 // keeps track of all entities' states
-struct EngineState {
+pub struct EngineState {
     tracks: HashMap<String, TrackRepr>,
     voices: HashMap<String, VoiceRepr>,
     groups: HashMap<String, GroupRepr>,
     tempo_cons: HashMap<String, TempoRepr>,
+    out_channels: usize,
+}
+
+impl EngineState {
+    pub fn new(files: Vec<AudioFile>, out_channels: usize) -> Self {
+        let mut tracks: HashMap<String, TrackRepr> = HashMap::new();
+        for (idx, af) in files.iter().enumerate() {
+            tracks.insert(af.file_name.clone(), TrackRepr::new(idx, af.clone()));
+        }
+
+        Self {
+            tracks,
+            out_channels,
+            voices: HashMap::<String, VoiceRepr>::new(),
+            groups: HashMap::<String, GroupRepr>::new(),
+            tempo_cons: HashMap::<String, TempoRepr>::new(),
+        }
+    }
 }
 
 // and formats commands for the engine
 // (handles string allocations, integer/float parsing, etc)
-struct CmdProcessor {
-    engine_state: EngineState,
+pub struct CmdProcessor {
+    pub engine_state: EngineState,
+}
+
+impl CmdProcessor {
+    pub fn new(engine_state: EngineState) -> Self {
+        Self { engine_state }
+    }
+    
+    pub fn parse(&mut self, cmd: String) -> Result<Command, String> {
+        let mut parts = cmd.splitn(2, ' ');
+        let cmd = parts.next().unwrap();
+        let args = parts.next().unwrap_or_else(|| "").to_string();
+        
+        match self.match_cmd(cmd) {
+            Some(matched) => Ok(Command::new(matched, args)),
+            None => Err("No command by that name".to_string()),
+        }
+    }
+
+    fn match_cmd(&self, cmd: &str) -> Option<CmdArg> {
+        match cmd {
+            "load" => Some(CmdArg::Load),
+            "start" => Some(CmdArg::Start),
+            "pause" => Some(CmdArg::Pause),
+            "resume" => Some(CmdArg::Resume),
+            "stop" => Some(CmdArg::Stop),
+            "unload" => Some(CmdArg::Unload),
+            "velocity" => Some(CmdArg::Velocity),
+            "group" => Some(CmdArg::Group),
+            "tc" | "tempocon" => Some(CmdArg::TempoContext),
+            "seq" => Some(CmdArg::Seq),
+            "q" | "quit" => Some(CmdArg::Quit),
+            _ => None,
+        }
+    }
 }
