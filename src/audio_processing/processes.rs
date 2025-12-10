@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use crate::audio_processing::{
     blast_rand::X128P,
     engine::VoiceState,
-    blast_time::blast_time::TempoState,
+    blast_time::blast_time::{TempoState, TempoMode},
 };
 
 // Processes
@@ -30,6 +30,14 @@ macro_rules! declare_processes {
                 match self {
                     $(
                         Process::$variant(inner) => inner.reset(),
+                    )*
+                }
+            }
+
+            pub fn update_tempo(&mut self, ts: Rc<RefCell<TempoState>>) {
+                match self {
+                    $(
+                        Process::$variant(inner) => inner.update_tempo(ts),
                     )*
                 }
             }
@@ -59,9 +67,9 @@ pub struct SeqState {
 impl Seq {
     // right now only retriggers samples
     fn process(&mut self, voice: &mut VoiceState) {
-        let state = &mut self.state;
-        if !state.active { return; }
+        if !self.state.active { return; }
 
+        let state = &mut self.state;
         let tempo = state.tempo.borrow();
 
         if !tempo.active { return; }
@@ -83,5 +91,11 @@ impl Seq {
 
     fn reset(&mut self) {
         self.state.seq_idx = 0;
+    }
+
+    fn update_tempo(&mut self, ts: Rc<RefCell<TempoState>>) {
+        if self.state.tempo.borrow().mode == TempoMode::TBD {
+            self.state.tempo = ts;
+        }
     }
 }
