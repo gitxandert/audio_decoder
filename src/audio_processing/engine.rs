@@ -796,7 +796,7 @@ impl Conductor {
 
                     tempo = Rc::clone(&tempo_ref);
 
-                    voice.tempo_solos.push(tempo_ref);
+                    voice.proc_tempi.push(tempo_ref);
                 }
                 "-p" | "--period" => {
                     period = match args.next() {
@@ -1046,7 +1046,7 @@ impl Conductor {
             chance,
             jit,
             rng,
-            seq_idx: 0,
+            idx: 0,
         };
 
         voice.processes.insert(
@@ -1071,7 +1071,7 @@ pub struct Voice {
     channels: usize,
     pub state: VoiceState,  
     processes: HashMap<String, Process>,
-    tempo_solos: Vec<Rc<RefCell<TempoState>>>,
+    proc_tempi: Vec<Rc<RefCell<TempoState>>>,
 }
 
 impl Voice {
@@ -1091,7 +1091,7 @@ impl Voice {
             channels: af.num_channels as usize, 
             state: voice_state,
             processes: HashMap::<String, Process>::new(),
-            tempo_solos: Vec::<Rc<RefCell<TempoState>>>::new(),
+            proc_tempi: Vec::<Rc<RefCell<TempoState>>>::new(),
         }
     }
 
@@ -1113,7 +1113,7 @@ impl Voice {
             }
         }
                 
-        for tempo_state in &mut self.tempo_solos {
+        for tempo_state in &mut self.proc_tempi {
             let mut ts = tempo_state.borrow_mut();
             ts.active = true;
             ts.reset();
@@ -1154,7 +1154,7 @@ impl Voice {
             ts.reset();
         }
 
-        for tempo_state in &self.tempo_solos {
+        for tempo_state in &self.proc_tempi {
             let mut ts = tempo_state.borrow_mut();
             ts.active = false;
             ts.reset();
@@ -1182,7 +1182,7 @@ impl Voice {
             own_tempo.update(1.0);
         }
 
-        for tempo_state in &mut self.tempo_solos {
+        for tempo_state in &mut self.proc_tempi {
             let mut ts = tempo_state.borrow_mut();
             ts.update(1.0);
         }
