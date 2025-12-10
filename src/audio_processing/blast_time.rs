@@ -66,8 +66,8 @@ pub mod blast_time {
     #[derive(Clone, Debug, PartialEq)]
     pub enum TempoMode {
         Solo,
-        Context,
         Group,
+        Context,
         TBD, // used by Voices and Groups;
              // Voices use this as a way to refer to a Group TempoState
     }
@@ -124,6 +124,7 @@ pub mod blast_time {
             self.interval = new_interval_in_samps;
         }
     }
+
 
     fn convert_interval(unit: &TempoUnit, interval: f32) -> f32 {
         let frac = match unit {
