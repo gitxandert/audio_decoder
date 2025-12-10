@@ -166,7 +166,7 @@ impl Conductor {
                                         let g_name = g_name.to_string();
                                         tempo_state = match self.groups.get(&g_name) {
                                             Some(g) => {
-                                                Rc::clone(&g.state.tempo_state)
+                                                Rc::clone(&g.state.tempo)
                                             }
                                             None => {
                                                 println!("\nErr: no Group with the name {g_name}");
@@ -220,34 +220,6 @@ impl Conductor {
         }
     }
 
-    // expand this to start multiple things at the same time;
-    // maybe implement "all" reserved word
-    fn start(&mut self, args: String) {
-        let mut args = args.split_whitespace();
-        let first = match args.next() {
-            Some(string) => string,
-            None => {
-                println!("\nErr: Not enough arguments for start");
-                return;
-            }
-        };
-
-        if let Some(second) = args.next() {
-            match first {
-                "-v" | "--voice" => self.start_voice(second),
-                "-g" | "--group" => self.start_group(second.to_string()),
-                "-t" | "--tempogroup" => self.start_tc(second.to_string()),
-                _ => {
-                    println!("\nErr: invalid argument {first} for start");
-                    return;
-                }
-            }
-        } else {
-            println!("\nErr: not enough arguments for start");
-            return;
-        }
-    }
-
     fn find_voice(&mut self, args: &str) -> Result<&mut Voice, String> {
         let mut args: Vec<&str> = args.split('.').collect();
         if args.len() > 2 {
@@ -259,7 +231,7 @@ impl Conductor {
             let voice = args.get(0).unwrap();
             match self.voices.get_mut(&voice.to_string()) {
                 Some(v) => return Ok(v),
-                None => return Err("\nErr: couldn't find Voice".to_string()),
+                None => return Err("\nErr: couldn't find Voice ".to_string()),
             }
         } else {
             let group = args.get(0).unwrap();
@@ -281,22 +253,38 @@ impl Conductor {
         }
     }
 
+    // expand this to start multiple things at the same time;
+    // maybe implement "all" as a reserved word
+    fn start(&mut self, args: String) {
+        let mut args = args.split_whitespace();
+        let first = match args.next() {
+            Some(string) => string,
+            None => {
+                println!("\nErr: Not enough arguments for start");
+                return;
+            }
+        };
+
+        if let Some(second) = args.next() {
+            match first {
+                "-v" | "--voice" => self.start_voice(second),
+                "-g" | "--group" => self.start_group(second.to_string()),
+                "-t" | "--tempogroup" => self.start_tc(second.to_string()),
+                _ => {
+                    println!("\nErr: must specify either -v, -g, or -t");
+                    return;
+                }
+            }
+        } else {
+            println!("\nErr: not enough arguments for start");
+            return;
+        }
+    }
+
     fn start_voice(&mut self, name: &str) {
         match self.find_voice(name) {
             Ok(mut voice) => {
-                let state = &mut voice.state;
-                state.active = true;
-                
-                for tempo_state in &mut voice.tempo_solos {
-                    let mut ts = tempo_state.borrow_mut();
-                    ts.active = true;
-                    ts.reset();
-                }
-
-                state.position = match state.velocity >= 0.0 {
-                    true => 0.0,
-                    false => state.end as f32,
-                };
+                voice.start();
             }
             Err(err) => println!("{err}"),
         }
@@ -305,22 +293,7 @@ impl Conductor {
     fn start_group(&mut self, name: String) {
         match self.groups.get_mut(&name) {
             Some(group) => {
-                let state = &mut group.state;
-                state.active = true;
-
-                for (_, mut voice) in &mut group.voices {
-                    voice.state.active = true;
-                }
-                
-                let mut ts = state.tempo_state.borrow_mut();
-                if ts.mode == TempoMode::Solo {
-                    ts.active = true;
-                    ts.reset();
-                } else {
-                    if ts.active == false {
-                        println!("\nWarn: TempoGroup not active for '{name}'");
-                    }
-                }
+                group.start();
             }
             None => println!("\nerr: could not find group '{name}'"),
         }
@@ -366,11 +339,7 @@ impl Conductor {
     fn pause_voice(&mut self, name: &str) {
         match self.find_voice(name) {
             Ok(mut voice) => {
-                voice.state.active = false;
-                for tempo_state in &voice.tempo_solos {
-                    let mut ts = tempo_state.borrow_mut();
-                    ts.active = false;
-                }
+                voice.pause();
             }
             Err(err) => println!("{err}"),
         }
@@ -379,17 +348,7 @@ impl Conductor {
     fn pause_group(&mut self, name: String) {
         match self.groups.get_mut(&name) {
             Some(group) => {
-                let state = &mut group.state;
-                state.active = false;
-
-                for (_, mut voice) in &mut group.voices {
-                    voice.state.active = false;
-                }
-                
-                let mut ts = state.tempo_state.borrow_mut();
-                if ts.mode == TempoMode::Solo {
-                    ts.active = false;
-                }
+                group.pause();
             }
             None => println!("\nErr: Couldn't find group '{name}'"),
         }
@@ -434,12 +393,7 @@ impl Conductor {
     fn resume_voice(&mut self, name: &str) {
         match self.find_voice(name) {
             Ok(mut voice) => {
-                let state = &mut voice.state;
-                state.active = true;
-                for tempo_state in &voice.tempo_solos {
-                    let mut ts = tempo_state.borrow_mut();
-                    ts.active = true;
-                }
+                voice.resume();
             }
             Err(err) => println!("{err}"),
         }
@@ -448,21 +402,7 @@ impl Conductor {
     fn resume_group(&mut self, name: String) {
         match self.groups.get_mut(&name) {
             Some(group) => {
-                let state = &mut group.state;
-                state.active = true;
-
-                for (_, mut voice) in &mut group.voices {
-                    voice.state.active = true;
-                }
-                
-                let mut ts = state.tempo_state.borrow_mut();
-                if ts.mode == TempoMode::Solo {
-                    ts.active = true;
-                } else {
-                    if ts.active == false {
-                        println!("\nWarn: TempoGroupnot active for {name}");
-                    }
-                }
+                group.resume();
             }
             None => println!("\nErr: Couldn't find group '{name}'"),
         }
@@ -507,22 +447,7 @@ impl Conductor {
     fn stop_voice(&mut self, name: &str) {
         match self.find_voice(name) {
             Ok(mut voice) => {
-                let state = &mut voice.state;
-                state.active = false;
-
-                for (_, p) in &mut voice.processes {
-                    p.reset();
-                }
-
-                for tempo_state in &voice.tempo_solos {
-                    let mut ts = tempo_state.borrow_mut();
-                    ts.active = false;
-                }
-
-                state.position = match state.velocity >= 0.0 {
-                    true => 0.0,
-                    false => state.end as f32,
-                };
+                voice.stop();
             }
             Err(err) => println!("{err}"),
         }
@@ -531,18 +456,7 @@ impl Conductor {
     fn stop_group(&mut self, name: String) {
         match self.groups.get_mut(&name) {
             Some(group) => {
-                let state = &mut group.state;
-                state.active = false;
-
-                for (_, mut voice) in &mut group.voices {
-                    voice.state.active = false;
-                }
-                
-                let mut ts = state.tempo_state.borrow_mut();
-                if ts.mode == TempoMode::Solo {
-                    ts.active = false;
-                    ts.reset();
-                }
+                group.stop();
             }
             None => println!("\nErr: Couldn't find group '{name}'"),
         }
@@ -638,6 +552,7 @@ impl Conductor {
         // -t tempo -v voices
 
         let mut tempo_state = Rc::new(RefCell::new(TempoState::new()));
+        tempo_state.borrow_mut().init(TempoMode::Group, TempoUnit::Bpm, 240.0);
         let mut voices = HashMap::<String, Voice>::new();
 
         let mut t_arg = |t: &str, current: Rc<RefCell<TempoState>>| -> Result<Rc<RefCell<TempoState>>, &'static str> {
@@ -660,8 +575,7 @@ impl Conductor {
                     Err(_) => return Err("\nErr: invalid interval")
                 };
            
-                // assign TempoMode::Solo to distinguish from a TempoGroup
-                current.borrow_mut().init(TempoMode::Solo, unit, interval);
+                current.borrow_mut().init(TempoMode::Group, unit, interval);
                 Ok(current)
             }
         };
@@ -724,6 +638,13 @@ impl Conductor {
             // [by proxy, if the Process refers to its Voice's TempoState])
             if voice.state.tempo.borrow().mode == TempoMode::TBD {
                 voice.state.tempo = Rc::clone(&tempo_state);
+                for (_, mut process) in &mut voice.processes {
+                    // checks if any Process tempo has TempoMode::TBD
+                    // (i.e. it was assigned to its Voice's
+                    // uninitialized tempo, in anticipation of the
+                    // Voice being added to a Group later)
+                    process.update_tempo(Rc::clone(&tempo_state));
+                }
             }
         }
         
@@ -901,6 +822,7 @@ impl Conductor {
                         }
                     };
                     let step_strs: Vec<&str> = s_arg.split(',').collect();
+
                     for step in step_strs {
                         match step.parse::<f32>() {
                             Ok(val) => steps.push(val),
@@ -1173,6 +1095,77 @@ impl Voice {
         }
     }
 
+    fn start(&mut self) {
+        let state = &mut self.state;
+        state.active = true;
+
+        for (_, p) in &mut self.processes {
+            p.reset();
+        }
+
+        let mut ts = state.tempo.borrow_mut();
+        if ts.mode == TempoMode::Solo {
+            ts.active = true;
+            ts.reset();
+        } else {
+            if ts.active == false {
+                println!("\nWarn: Tempo not active for Voice");
+            }
+        }
+                
+        for tempo_state in &mut self.tempo_solos {
+            let mut ts = tempo_state.borrow_mut();
+            ts.active = true;
+            ts.reset();
+        }
+
+        state.position = match state.velocity >= 0.0 {
+            true => 0.0,
+            false => state.end as f32,
+        };
+    }
+
+    fn pause(&mut self) {
+        self.state.active = false;
+    }
+
+    fn resume(&mut self) {
+        self.state.active = true;
+
+        let ts = self.state.tempo.borrow();
+        if ts.mode != TempoMode::Solo {
+            if ts.active == false {
+                println!("\nWarn: Tempo not active for Voice");
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        let state = &mut self.state;
+        state.active = false;
+
+        for (_, p) in &mut self.processes {
+            p.reset();
+        }
+
+        let mut ts = state.tempo.borrow_mut();
+        if ts.mode == TempoMode::Solo {
+            ts.active = false;
+            ts.reset();
+        }
+
+        for tempo_state in &self.tempo_solos {
+            let mut ts = tempo_state.borrow_mut();
+            ts.active = false;
+            ts.reset();
+        }
+
+        state.position = match state.velocity >= 0.0 {
+            true => 0.0,
+            false => state.end as f32,
+        };
+    }
+
     fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
         if !self.state.active { return; }
 
@@ -1241,7 +1234,7 @@ impl Voice {
 pub struct GroupState {
     pub active: bool,
     pub gain: f32,
-    pub tempo_state: Rc<RefCell<TempoState>>,
+    pub tempo: Rc<RefCell<TempoState>>,
 }
 
 pub struct Group {
@@ -1251,17 +1244,67 @@ pub struct Group {
 }
 
 impl Group {
-    fn new(voices: HashMap<String, Voice>, tempo_state: Rc<RefCell<TempoState>>) -> Self {
+    fn new(voices: HashMap<String, Voice>, tempo: Rc<RefCell<TempoState>>) -> Self {
         let state = GroupState {
             active: false,
             gain: 1.0,
-            tempo_state,
+            tempo,
         };
 
         Self {
             state,
             voices,
             // processes: HashMap::<String, Process>::new(),
+        }
+    }
+
+    fn start(&mut self) {
+        let state = &mut self.state;
+        state.active = true;
+
+        {   
+            let mut ts = state.tempo.borrow_mut();
+            if ts.mode == TempoMode::Group {
+                ts.active = true;
+                ts.reset();
+            } else {
+                if ts.active == false {
+                    println!("\nWarn: Tempo not active for Group");
+                }
+            }
+        }
+
+        for (_, voice) in &mut self.voices {
+            voice.start();
+        }
+    }
+
+    fn pause(&mut self) {
+        self.state.active = false;
+    }
+
+    fn resume(&mut self) {
+        self.state.active = true;
+                
+        let ts = self.state.tempo.borrow();
+        if ts.mode == TempoMode::Context {
+            if ts.active == false {
+                println!("\nWarn: Tempo not active for Group");
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        self.state.active = false;
+
+        for (_, mut voice) in &mut self.voices {
+            voice.state.active = false;
+        }
+                
+        let mut ts = self.state.tempo.borrow_mut();
+        if ts.mode == TempoMode::Group {
+            ts.active = false;
+            ts.reset();
         }
     }
 
@@ -1275,8 +1318,8 @@ impl Group {
             v.process(acc, frame, ch);
         }
 
-        let mut ts = state.tempo_state.borrow_mut();
-        if ts.mode == TempoMode::Solo {
+        let mut ts = state.tempo.borrow_mut();
+        if ts.mode == TempoMode::Group {
             ts.update(1.0);
         }
     }
