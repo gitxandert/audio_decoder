@@ -166,8 +166,7 @@ impl Conductor {
                                         let g_name = g_name.to_string();
                                         tempo_state = match self.groups.get(&g_name) {
                                             Some(g) => {
-                                                let g_tempo = &g.state.tempo_state;
-                                                Rc::clone(g_tempo)
+                                                Rc::clone(&g.state.tempo_state)
                                             }
                                             None => {
                                                 println!("\nErr: no Group with the name {g_name}");
@@ -235,7 +234,7 @@ impl Conductor {
 
         if let Some(second) = args.next() {
             match first {
-                "-v" | "--voice" => self.parse_start_voice_args(second),
+                "-v" | "--voice" => self.start_voice(second),
                 "-g" | "--group" => self.start_group(second.to_string()),
                 "-t" | "--tempogroup" => self.start_tc(second.to_string()),
                 _ => {
@@ -249,37 +248,42 @@ impl Conductor {
         }
     }
 
-    // this allows users to specify a voice in a group,
-    // using the format group.voice (e.g. drums.kick)
-    fn parse_start_voice_args(&mut self, args: &str) {
+    fn find_voice(&mut self, args: &str) -> Result<&mut Voice, String> {
         let mut args: Vec<&str> = args.split('.').collect();
         if args.len() > 2 {
-            println!("\nErr: too many delimiters for format group.voice");
-            return;
+            return Err("\nErr: too many delimiters for format group.voice".to_string());
         }
 
         // args will never be 0
         if args.len() == 1 {
             let voice = args.get(0).unwrap();
-            self.start_voice(voice.to_string());
+            match self.voices.get_mut(&voice.to_string()) {
+                Some(v) => return Ok(v),
+                None => return Err("\nErr: couldn't find Voice".to_string()),
+            }
         } else {
             let group = args.get(0).unwrap();
             let group = group.to_string();
             let voice = args.get(1).unwrap();
 
-            match self.groups.get(&group) {
-                Some(g) => self.start_voice(voice.to_string()),
-                None => {
-                    println!("\nErr: couldn't find group '{group}'");
-                    return;
+            match self.groups.get_mut(&group) {
+                Some(g) => {
+                    match g.voices.get_mut(&voice.clone().to_string()) {
+                        Some(v) => return Ok(v),
+                        None => {
+                            let err = "\nErr: couldn't find Voice ".to_owned() + voice + " in Group " + &group;
+                            return Err(err);
+                        }
+                    }
                 }
+                None => return Err("\nErr: couldn't find Group".to_string()),
             }
         }
     }
 
-    fn start_voice(&mut self, name: String) {
-        match self.voices.get_mut(&name) {
-            Some(voice) => {
+    fn start_voice(&mut self, name: &str) {
+        match self.find_voice(name) {
+            Ok(mut voice) => {
                 let state = &mut voice.state;
                 state.active = true;
                 
@@ -294,7 +298,7 @@ impl Conductor {
                     false => state.end as f32,
                 };
             }
-            None => println!("\nErr: Couldn't find voice '{name}'"),
+            Err(err) => println!("{err}"),
         }
     }
 
@@ -345,7 +349,7 @@ impl Conductor {
 
         if let Some(second) = args.next() {
             match first {
-                "-v" | "--voice" => self.parse_pause_voice_args(second),
+                "-v" | "--voice" => self.pause_voice(second),
                 "-g" | "--group" => self.pause_group(second.to_string()),
                 "-t" | "--tempogroup" => self.pause_tc(second.to_string()),
                 _ => {
@@ -359,42 +363,16 @@ impl Conductor {
         }
     }
 
-    fn parse_pause_voice_args(&mut self, args: &str) {
-        let mut args: Vec<&str> = args.split('.').collect();
-        if args.len() > 2 {
-            println!("\nErr: too many delimiters for format group.voice");
-            return;
-        }
-
-        // args will never be 0
-        if args.len() == 1 {
-            let voice = args.get(0).unwrap();
-            self.pause_voice(voice.to_string());
-        } else {
-            let group = args.get(0).unwrap();
-            let group = group.to_string();
-            let voice = args.get(1).unwrap();
-
-            match self.groups.get(&group) {
-                Some(g) => self.pause_voice(voice.to_string()),
-                None => {
-                    println!("\nErr: couldn't find group '{group}'");
-                    return;
-                }
-            }
-        }
-    }
-
-    fn pause_voice(&mut self, name: String) {
-        match self.voices.get_mut(&name) {
-            Some(voice) => {
+    fn pause_voice(&mut self, name: &str) {
+        match self.find_voice(name) {
+            Ok(mut voice) => {
                 voice.state.active = false;
                 for tempo_state in &voice.tempo_solos {
                     let mut ts = tempo_state.borrow_mut();
                     ts.active = false;
                 }
             }
-            None => println!("\nErr: Couldn't find voice '{name}'"),
+            Err(err) => println!("{err}"),
         }
     }
 
@@ -439,7 +417,7 @@ impl Conductor {
 
         if let Some(second) = args.next() {
             match first {
-                "-v" | "--voice" => self.parse_resume_voice_args(second),
+                "-v" | "--voice" => self.resume_voice(second),
                 "-g" | "--group" => self.resume_group(second.to_string()),
                 "-t" | "--tempogroup" => self.resume_tc(second.to_string()),
                 _ => {
@@ -453,35 +431,9 @@ impl Conductor {
         }
     }
 
-    fn parse_resume_voice_args(&mut self, args: &str) {
-        let mut args: Vec<&str> = args.split('.').collect();
-        if args.len() > 2 {
-            println!("\nErr: too many delimiters for format group.voice");
-            return;
-        }
-
-        // args will never be 0
-        if args.len() == 1 {
-            let voice = args.get(0).unwrap();
-            self.resume_voice(voice.to_string());
-        } else {
-            let group = args.get(0).unwrap();
-            let group = group.to_string();
-            let voice = args.get(1).unwrap();
-
-            match self.groups.get(&group) {
-                Some(g) => self.resume_voice(voice.to_string()),
-                None => {
-                    println!("\nErr: Couldn't find group '{group}'");
-                    return;
-                }
-            }
-        }
-    }
-
-    fn resume_voice(&mut self, name: String) {
-        match self.voices.get_mut(&name) {
-            Some(voice) => {
+    fn resume_voice(&mut self, name: &str) {
+        match self.find_voice(name) {
+            Ok(mut voice) => {
                 let state = &mut voice.state;
                 state.active = true;
                 for tempo_state in &voice.tempo_solos {
@@ -489,7 +441,7 @@ impl Conductor {
                     ts.active = true;
                 }
             }
-            None => println!("\nErr: Couldn't find voice '{name}'"),
+            Err(err) => println!("{err}"),
         }
     }
 
@@ -538,7 +490,7 @@ impl Conductor {
 
         if let Some(second) = args.next() {
             match first {
-                "-v" | "--voice" => self.parse_stop_voice_args(second),
+                "-v" | "--voice" => self.stop_voice(second),
                 "-g" | "--group" => self.stop_group(second.to_string()),
                 "-t" | "--tempogroup" => self.stop_tc(second.to_string()),
                 _ => {
@@ -552,35 +504,9 @@ impl Conductor {
         }
     }
 
-    fn parse_stop_voice_args(&mut self, args: &str) {
-        let mut args: Vec<&str> = args.split('.').collect();
-        if args.len() > 2 {
-            println!("\nErr: too many delimiters for format group.voice");
-            return;
-        }
-
-        // args will never be 0
-        if args.len() == 1 {
-            let voice = args.get(0).unwrap();
-            self.stop_voice(voice.to_string());
-        } else {
-            let group = args.get(0).unwrap();
-            let group = group.to_string();
-            let voice = args.get(1).unwrap();
-
-            match self.groups.get(&group) {
-                Some(g) => self.stop_voice(voice.to_string()),
-                None => {
-                    println!("\nErr: Couldn't find group '{group}'");
-                    return;
-                }
-            }
-        }
-    }
-
-    fn stop_voice(&mut self, name: String) {
-        match self.voices.get_mut(&name) {
-            Some(voice) => {
+    fn stop_voice(&mut self, name: &str) {
+        match self.find_voice(name) {
+            Ok(mut voice) => {
                 let state = &mut voice.state;
                 state.active = false;
 
@@ -598,7 +524,7 @@ impl Conductor {
                     false => state.end as f32,
                 };
             }
-            None => println!("\nErr: Couldn't find voice '{name}'"),
+            Err(err) => println!("{err}"),
         }
     }
 
@@ -915,8 +841,7 @@ impl Conductor {
                     if u == "v" {
                         // refer to Voice's TempoState;
                         // if Voice's TempoState is a Group's, Seq will run when this Group does
-                        let voice_tempo = &voice.state.tempo;
-                        tempo = Rc::clone(voice_tempo);
+                        tempo = Rc::clone(&voice.state.tempo);
                         continue;
                     }
 
