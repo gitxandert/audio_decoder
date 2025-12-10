@@ -54,14 +54,14 @@ pub struct Seq {
 }
 
 pub struct SeqState {
-    pub active: bool,
+    pub active: bool, // TODO: impl activation methods
     pub period: usize,
     pub tempo: Rc<RefCell<TempoState>>,
     pub steps: Vec<f32>,
     pub chance: Vec<f32>,
     pub jit: Vec<f32>,
-    pub rng: X128P, // implement user-defined seed ASP
-    pub seq_idx: usize,
+    pub rng: X128P, // TODO: impl user-defined seed
+    pub idx: usize,
 }
 
 impl Seq {
@@ -76,21 +76,21 @@ impl Seq {
 
         let current = tempo.current() % state.period as f32;
 
-        if current == state.steps[state.seq_idx] {
+        if current == state.steps[state.idx] {
             let rand = state.rng.next_i64_range(0, 100);
-            if rand < state.chance[state.seq_idx] as i64 {
+            if rand < state.chance[state.idx] as i64 {
                 voice.position = match voice.velocity >= 0.0 {
                     true => 0.0,
                     false => voice.end as f32,
                 };
             }
-            state.seq_idx += 1;
-            state.seq_idx %= state.steps.len();
+            state.idx += 1;
+            state.idx %= state.steps.len();
         }
     }
 
     fn reset(&mut self) {
-        self.state.seq_idx = 0;
+        self.state.idx = 0;
     }
 
     fn update_tempo(&mut self, ts: Rc<RefCell<TempoState>>) {
