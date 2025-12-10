@@ -14,7 +14,7 @@ impl From<std::io::Error> for DecodeError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AudioFile {
     pub file_name: String,
     pub format: String,
