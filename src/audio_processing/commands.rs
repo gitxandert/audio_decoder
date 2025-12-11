@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use proc_macro::{TokenStream, TokenTree, Ident, Span};
+
 use crate::file_parsing::decode_helpers::AudioFile;
 
 pub struct CmdQueue {
@@ -64,8 +66,29 @@ impl CmdQueue {
     }
 }
 
-#[derive(Copy, Clone)]
-pub enum CmdArg {
+#[proc_macro]
+pub fn var_args(var: TokenStream) -> TokenStream {
+    let var = var.to_string().trim().to_string();
+    let var_args = Ident::new(&format!("{}Args", var), Span::call_site());
+
+    TokenStream::from(TokenTree::Ident(var_args))
+}
+
+macro_rules! commands {
+    ( $( $var:ident ),* $(,)? ) => {
+        #[derive(Copy, Clone)]
+        pub enum Command {
+            $(
+                $var(var_args!($var)), // formats as {CmdType}Args)
+            )*
+        }
+
+        unsafe impl Send for Command {}
+        unsafe impl Sync for Command {}
+    }
+}
+
+commands! {
     // Voices
     Load,
     Start,
@@ -83,29 +106,21 @@ pub enum CmdArg {
     Quit,
 }
 
-unsafe impl Send for CmdArg {}
-unsafe impl Sync for CmdArg {}
-
-#[derive(Clone)]
-pub struct Command {
-    cmd: CmdArg,
-    args: String,
+pub struct LoadArgs {
+    track_idx: usize,
+    voice_repr: VoiceRepr,
 }
 
-unsafe impl Send for Command {}
-unsafe impl Sync for Command {}
-
-impl Command {
-    pub fn new(cmd: CmdArg, args: String) -> Self {
-        Self { cmd, args }
-    }
-
-    pub fn unwrap(&self) -> (CmdArg, String) {
-        (self.cmd, self.args.clone())
+impl LoadArgs {
+    fn new(track_idx: usize, voice_repr: VoiceRepr) -> Self {
+        Self { track_idx, voice_repr }
     }
 }
 
-// need to process commands outside of the audio thread
+// doesn't need any members, just triggers raise(SIGTERM)
+pub struct QuitArgs {}
+
+// process commands outside of the audio thread
 
 use crate::audio_processing::{
     blast_time::blast_time::{TempoMode, TempoUnit, TempoState},
@@ -113,19 +128,16 @@ use crate::audio_processing::{
 
 struct TrackRepr {
     idx: usize,
-    file_name: String,
     format: String,
     sample_rate: u32,
     num_channels: u32,
     bits_per_sample: u32,
-    // don't need the samples
 }
 
 impl TrackRepr {
     fn new(idx: usize, af: AudioFile) -> Self {
         Self {
             idx,
-            file_name: af.file_name,
             format: af.format,
             sample_rate: af.sample_rate,
             num_channels: af.num_channels,
@@ -225,26 +237,40 @@ impl CmdProcessor {
         let cmd = parts.next().unwrap();
         let args = parts.next().unwrap_or_else(|| "").to_string();
         
-        match self.match_cmd(cmd) {
-            Some(matched) => Ok(Command::new(matched, args)),
-            None => Err("No command by that name".to_string()),
+        match cmd {
+            "load" => self.try_load(args),
+            "start" => self.try_start(args),
+            "pause" => self.try_pause(args),
+            "resume" => self.try_resume(args),
+            "stop" => self.try_stop(args),
+            "unload" => self.try_unload(args),
+            "velocity" => self.try_velocity(args),
+            "group" => self.try_group(args),
+            "tc" | "tempocon" => self.try_tc(args),
+            "seq" => self.try_seq(args),
+            "q" | "quit" => Ok(Command::Quit { QuitArgs }),
+            _ => {
+                let err = "Invalid command ".to_owned() + &cmd;
+                Err(err)
+            }
         }
     }
 
-    fn match_cmd(&self, cmd: &str) -> Option<CmdArg> {
-        match cmd {
-            "load" => Some(CmdArg::Load),
-            "start" => Some(CmdArg::Start),
-            "pause" => Some(CmdArg::Pause),
-            "resume" => Some(CmdArg::Resume),
-            "stop" => Some(CmdArg::Stop),
-            "unload" => Some(CmdArg::Unload),
-            "velocity" => Some(CmdArg::Velocity),
-            "group" => Some(CmdArg::Group),
-            "tc" | "tempocon" => Some(CmdArg::TempoContext),
-            "seq" => Some(CmdArg::Seq),
-            "q" | "quit" => Some(CmdArg::Quit),
-            _ => None,
-        }
+    fn try_load(&mut self, args: String) -> Result<Command, String> {
+        // parse args to:
+        // - validate that the Track exists
+        // - get the Track's idx
+        // - format TempoRepr
+        // - format VoiceRepr for engine
+        //
+        // engine then parses LoadArgs to:
+        // - get the Track
+        // - create a TempoState based on the TempoRepr
+        //      - this involves checking TempoRepr.mode
+        //        to see if the Voice's TempoState refers to
+        //        an existing TempoState
+        // - call Voice::new(track, tempo_state)
+        //
+        Ok(Command::Load { LoadArgs::new(track_idx, voice_repr) })
     }
 }
