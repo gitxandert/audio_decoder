@@ -9,7 +9,7 @@ use crate::audio_processing::{
 
 // Processes
 //
-macro_rules! declare_processes {
+macro_rules! processes {
     ( $( $variant:ident ),* $(,)? ) => {
         pub enum Process {
             $(
@@ -45,7 +45,7 @@ macro_rules! declare_processes {
     };
 }
 
-declare_processes! {
+processes! {
     Seq,
 }
 
