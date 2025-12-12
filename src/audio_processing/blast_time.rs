@@ -65,11 +65,12 @@ pub mod blast_time {
 
     #[derive(Clone, Debug, PartialEq)]
     pub enum TempoMode {
-        Solo,
+        Process,
+        Voice,
         Group,
         Context,
-        TBD, // used by Voices and Groups;
-             // Voices use this as a way to refer to a Group TempoState
+        TBD, // used by Voices as a way to refer to a Group TempoState;
+             // could extend this for Groups too
     }
 
     #[derive(Clone, Debug, PartialEq)]
@@ -80,10 +81,14 @@ pub mod blast_time {
     }
 
     impl TempoState {
-        pub fn new() -> Self {
+        pub fn new(opt: Option<TempoMode>) -> Self {
+            let mode = match opt {
+                Some(tm) => tm,
+                None => TempoMode::TBD, // subject to change
+            };
+
             Self {
-                // if mode is not provided (through init()), then it may change
-                mode: TempoMode::TBD,
+                mode,
                 unit: TempoUnit::Samples,
                 interval: sample_rate::get() as f32,
                 active: false,
