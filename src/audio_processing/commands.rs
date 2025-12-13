@@ -307,6 +307,9 @@ impl CmdProcessor {
         }
     }
 
+    // CmdResults (returned directly to command thread)
+    //
+
     fn try_load(&mut self, args: String) -> CmdResult<Command> {
         // parse args to:
         // - validate that the Track exists
@@ -328,87 +331,86 @@ impl CmdProcessor {
             None => return Err(CmdErr::MissingArgs { cmd: "load".to_string() }),
         };
 
-        let mut track_idx = 0usize;
-        let mut tempo_repr = TempoRepr::new(0usize);
+        let mut track_idx = self.find_track(name.clone())?;
+        
         // initialize tempo_repr with an idx of 0 because
         // a Voice will only ever have one personal TempoState
+        let mut tempo_repr = TempoRepr::new(0usize);
 
-        match self.tracks.get(name) {
-            Some(track) => {
-                track_idx = track.idx;
-                match self.voices.entry(name.to_string()) {
-                    Entry::Vacant(e) => {
-                        while let Some(arg) = args.next() {
-                            match arg {
-                                "-t" | "--tempo" => {
-                                    let t_arg = match args.next() {
-                                        Some(arg) => arg,
-                                        None => return Err(CmdErr::MissingArgs { cmd: "load -t/--tempo".to_string() }),
-                                    };
-
-                                    let mut t_args = t_arg.split(':');
-
-                                    let u = t_args.next().unwrap();
-                                    if u == "c" {
-                                        // find TempoContext
-                                        let tc_name = match t_args.next() {
-                                            Some(name) => name,
-                                            None => return Err(CmdErr::MissingArgs { cmd: "load -t c:???".to_string() }),
-                                        };
-                                        tempo_repr = match self.find_tc(tc_name) {
-                                            Ok(tc) => TempoRepr::clone(tc),
-                                            Err(error) => return Err(error.into()),
+        // if a Voice by this name (currently the track name)
+        // already exists, then return error
+        match self.find_voice(name) {
+            Ok(voice) => return Err(CmdErr::AlreadyIs { ty: "Voice".to_string(), name: name.to_owned() },
+            Err(_) => (),
+        }
         
-                                        };
-                                        continue;
-                                    }
-                                    if u == "g" {
-                                        let g_name = match t_args.next() {
-                                            Some(g) => g,
-                                            None => return Err(CmdErr::MissingArgs { cmd: "load -t g:???".to_string() }),
-                                        };
-                                        tempo_repr = match self.find_group(g_name) {
-                                            Ok(g) => TempoRepr::clone(&g.tempo),
-                                            Err(error) => return Err(error.into()),
-                                        };
-                                        continue;
-                                    }
+        while let Some(arg) = args.next() {
+            match arg {
+                "-t" | "--tempo" => {
+                    let t_arg = match args.next() {
+                        Some(arg) => arg,
+                        None => return Err(CmdErr::MissingArgs { cmd: "load -t/--tempo".to_string() }),
+                    };
+
+                    let mut t_args = t_arg.split(':');
+
+                    let u = t_args.next().unwrap();
+                    if u == "c" {
+                        // find TempoContext
+                        let tc_name = match t_args.next() {
+                            Some(name) => name,
+                            None => return Err(CmdErr::MissingArgs { cmd: "load -t c:???".to_string() }),
+                        };
+                        tempo_repr = match self.find_tc(tc_name) {
+                            Ok(tc) => TempoRepr::clone(tc),
+                            Err(error) => return Err(error.into()),
+                        };
+                        continue;
+                    }
+                    if u == "g" {
+                        // find Group
+                        let g_name = match t_args.next() {
+                            Some(g) => g,
+                            None => return Err(CmdErr::MissingArgs { cmd: "load -t g:???".to_string() }),
+                        };
+                        tempo_repr = match self.find_group(g_name) {
+                            Ok(g) => TempoRepr::clone(&g.tempo),
+                            Err(error) => return Err(error.into()),
+                        };
+                        continue;
+                    }
+
+                    // make new TempoState from matched arguments
                                     
-                                    let unit = match u {
-                                        "s" => TempoUnit::Samples,
-                                        "m" => TempoUnit::Millis,
-                                        "b" => TempoUnit::Bpm,
-                                        _ => return Err(CmdErr::InvalidArg { arg: u.to_owned(), cmd: "load -t".to_string() }),
-                                    };
+                    let unit = match u {
+                        "s" => TempoUnit::Samples,
+                        "m" => TempoUnit::Millis,
+                        "b" => TempoUnit::Bpm,
+                        _ => return Err(CmdErr::InvalidArg { arg: u.to_owned(), cmd: "load -t".to_string() }),
+                    };
 
-                                    let interval = match t_args.next() {
-                                        Some(int) {
-                                            match int.parse::<f32>() {
-                                                Ok(val) => val,
-                                                Err(_) => {
-                                                    return Err(CmdErr::InvalidArg { arg: int.to_owned(), cmd: "load -t".to_string() });
-                                                }
-                                            }
-                                        }
-                                        None => return Err(CmdErr::MissingArgs { cmd: "load -t".to_string() }),
-                                    };
-
-                                    tempo_repr.init(TempoMode::Solo, unit, interval);
+                    let interval = match t_args.next() {
+                        Some(int) {
+                            match int.parse::<f32>() {
+                                Ok(val) => val,
+                                Err(_) => {
+                                    return Err(CmdErr::InvalidArg { arg: int.to_owned(), cmd: "load -t".to_string() });
                                 }
-                            _ => {
-                                return Err(CmdErr::InvalidArg { arg: arg.to_owned(), cmd: "load -t".to_string() });
                             }
                         }
-                        // if this is the first Voice,
-                        // it will be indexed at 0
-                        let idx = self.voices.len();
-                        e.insert(VoiceRepr::new(idx, TempoRepr::clone(tempo_repr));
-                    }
-                    Entry::Occupied(_) => return Err(CmdErr::AlreadyIs { ty: "Voice".to_string(), name: name.to_owned() },
+                        None => return Err(CmdErr::MissingArgs { cmd: "load -t".to_string() }),
+                    };
+
+                    tempo_repr.init(TempoMode::Voice, unit, interval);
                 }
+                // no argument matched
+                _ => return Err(CmdErr::InvalidArg { arg: arg.to_owned(), cmd: "load -t".to_string() }),
             }
-            None => return Err(CmdErr::NoTrack { name: name.to_owned() }),
         }
+        // if this is the first Voice,
+        // it will be indexed at 0
+        let idx = self.voices.len();
+        self.voices.insert(VoiceRepr::new(idx, TempoRepr::clone(tempo_repr));
         
         Ok(Command::Load(LoadArgs{track_idx, tempo_repr}))
     }
@@ -441,6 +443,57 @@ impl CmdProcessor {
         Ok(Command::Stop(StopArgs{ idx }))
     } 
 
+    fn try_unload(&mut self, args: Name) -> CmdResult<Command> {
+        // gets idx and removes VoiceRepr from self.voices
+        let idx = match self.voices.entry(name.clone().to_string()) {
+            Entry::Occupied(e) => {
+                let e_idx = e.idx;
+                e.remove();
+                e
+            }
+            Entry::Vacant(_) => {
+                return Err(CmdErr::NoVoice { name: name.to_owned(), group: None });
+            }
+        };
+
+        // since all Voices after the removed Voice will be 
+        // shifted to the left, decrease all VoiceReprs with
+        // an idx greater than the removed Voice's
+        for (_, voice) in self.voices {
+            if voice.idx > idx {
+                voice.idx -= 1;
+            }
+        }
+
+        Ok(Command::Unload(UnloadArgs{ idx }))
+    }
+
+    fn try_velocity(&mut self, args: &str) -> CmdResult<Command> {
+        let mut args = args.splitn(2, ' ');
+        
+        let name = match args.next() {
+            Some(string) => string,
+            None => return Err(CmdErr::MissingArgs{ cmd: "velocity".to_string() }),
+        };
+        
+        let idx = self.get_idx("-v", name)?;
+
+        let val = match args.next() {
+            Some(num) => {
+                match num.parse::<f32>() {
+                    Ok(f) => f,
+                    Err(_) => return Err(CmdErr::InvalidArg{ arg: num.to_owned(), cmd: "velocity".to_string() }),
+                }
+            }
+            None => return Err(CmdError::MissingArgs{ cmd: "velocity".to_string() }),
+        };
+
+        Ok(Command::Velocity(VelocityArgs{ idx, val }))
+    }
+
+    // StateResults (returned to a CmdResult fn)
+    //
+
     fn parse_type_and_name(args: &str) -> StateResult<(&str, &str)> {
         let mut args = args.split_whitespace();
         let first = match args.next() {
@@ -470,6 +523,13 @@ impl CmdProcessor {
                 Ok(Idx::Tempo(t.idx))
             }
             _ => return Err(StateErr::MissingArgs { cmd: "-v/-g/-t".to_string() }),
+        }
+    }
+
+    fn find_track(&mut self, name: &str) -> StateResult<&mut TrackRepr> {
+        match self.tracks.get_mut(&name.clone().to_string()) {
+            Some(track) => Ok(track),
+            None => Err(StateErr::NoItem { ty: "track".to_string(), name: name.to_owned() }),
         }
     }
 
@@ -521,112 +581,82 @@ impl CmdProcessor {
         }
     }
 
-    fn try_unload(&mut self, args: Name) -> CmdResult<Command> {
-        // gets idx and removes VoiceRepr from self.voices
-        let idx = match self.voices.entry(name.clone().to_string()) {
-            Entry::Occupied(e) => {
-                let e_idx = e.idx;
-                e.remove();
-                e
-            }
-            Entry::Vacant(_) => {
-                return Err(CmdErr::NoVoice { name: name.to_owned(), group: None });
-            }
-        };
-
-        // since all Voices after the removed Voice will be 
-        // shifted to the left, decrease all VoiceReprs with
-        // an idx greater than the removed Voice's
-        for (_, voice) in self.voices {
-            if voice.idx > idx {
-                voice.idx -= 1;
-            }
-        }
-
-        Ok(Command::Unload(UnloadArgs{ idx }))
-    }
-
-    fn try_velocity(&mut self, args: &str) -> CmdResult<Command> {
-        let mut args = args.splitn(2, ' ');
-        
-        let name = match args.next() {
-            Some(string) => string,
-            None => return Err(CmdErr::MissingArgs{ cmd: "velocity".to_string() }),
-        };
-        
-        let idx = self.get_idx("-v", name)?;
-
-        let val = match args.next() {
-            Some(num) => {
-                match num.parse::<f32>() {
-                    Ok(f) => f,
-                    Err(_) => return Err(CmdErr::InvalidArg{ arg: num.to_owned(), cmd: "velocity".to_string() }),
-                }
-            }
-            None => return Err(CmdError::MissingArgs{ cmd: "velocity".to_string() }),
-        };
-
-        Ok(Command::Velocity(VelocityArgs{ idx, val }))
-    }
 }
 
-// error handling
+// results and error handling
 //
-use std::fmt;
-
-// Commands
+// ...for Commands
+// (user-facing)
 //
 pub type CmdResult<Command> = Result<Command, CmdErr>;
 
-pub enum CmdErr {
-    NoCmd { cmd: String },
+// ...for states (*Reprs, Idx, args parsed internally, etc.)
+// (private, but map directly to CmdErrs)
+//
+type StateResult<T> = Result<T, StateErr>;
+
+// generate identical enums for CmdErr and StateErr
+// and impl conversion from StateErr (internal) 
+// to CmdErr (user-facing)
+//
+macro_rules! cmd_errors {
+    ( $( $var:ident { $( $arg:ident : $type:ty ),* ),* $(,)? ) => {
+        #[derive(Debug)]
+        pub enum CmdErr {
+            $(
+                $var { $( $arg: $type, )* },
+            )
+        }
+
+        #[derive(Debug)]
+        enum StateErr {
+            $(
+                $var { $( $arg: $type, )* },
+            )
+        }
+        
+        impl From<StateErr> for CmdErr {
+            fn from(err: StateErr) -> Self {
+                match err {
+                    $(
+                        StateErr::$var { $( $arg, )* } => {
+                            CmdErr::$var { $( $arg, )* }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+cmd_errors! {
+    Formatting { err: String },
     MissingArgs { cmd: String },
     InvalidArg { arg: String, cmd: String },
     AlreadyIs { ty: String, name: String },
+    NoCmd { cmd: String },
     NoItem { ty: String, name: String },
     NoVoice { name: String, group: Option<String> },
 }
 
+// display different messages based on error
+//
+use std::fmt;
+
 impl fmt::Display for CmdErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CmdErr::NoCmd { cmd } => write!(f, "Invalid command '{}'", cmd),
+            CmdErr::Formatting { err } => write!(f, "{}", err), // verbatim, must explain in context
             CmdErr::MissingArgs { cmd } => write!(f, "Missing arguments for '{}'", cmd),
             CmdErr::InvalidArg { arg, cmd } => write!(f, "Invalid argument '{}' for '{}'", arg, cmd),
             CmdErr::AlreadyIs { ty, name } => write!(f, "Already a {} called '{}'", ty, name),
+            CmdErr::NoCmd { cmd } => write!(f, "Invalid command '{}'", cmd),
             CmdErr::NoItem { ty, name } => write!(f, "Couldn't find {} '{}'", ty, name),
             CmdErr::NoVoice { name, group } => {
                 match group {
                     Some(g_name) => write!(f, "Couldn't find Voice '{}' in Group '{}'", name, g_name),
                     None => write!(f, "Couldn't find Voice '{}'", name),
                 }
-            }
-        }
-    }
-}
-
-// states (*Reprs, Idx, args parsed internally, etc.)
-// (private, but map to CmdErrs)
-//
-type StateResult<T> = Result<T, StateErr>;
-
-enum StateErr {
-    MissingArgs { cmd: String },
-    NoItem { ty: String, name: String },
-    NoVoice { name: String, group: Option<String> },
-}
-
-impl From<StateErr> for CmdErr {
-    fn from(err: StateErr) -> Self {
-        match err {
-            StateErr::MissingArgs { cmd } =>
-                CmdErr::MissingArgs { cmd }
-            }
-            StateErr::NoItem { ty, name } => {
-                CmdErr::NoVoice { ty, name }
-            }
-            StateErr::NoVoice { name, group } => {
-                CmdErr::NoVoice { name, group }
             }
         }
     }
