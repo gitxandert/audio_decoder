@@ -162,18 +162,6 @@ impl Conductor {
         }
     }
 
-    /* TODO: turn loop into a Process
-    fn loop_voice(&mut self, name: &str) {
-        for voice in &mut self.voices {
-            if voice.name == name {
-                voice._loop = true;
-                return;
-            }
-        }
-        println!("\nErr: Couldn't find voice '{name}'");
-    }
-    */
-
     fn unload(&mut self, args: UnloadArgs) {
         self.voices.remove(args.idx);
     }
@@ -182,118 +170,27 @@ impl Conductor {
         self.voices[args.idx].state.velocity = args.val;
     }
 
-    fn group(&mut self, args: String) {
-        let mut args = args.split_whitespace();
-        let name = match args.next() {
-            Some(string) => string,
-            None => {
-                println!("\nErr: not enough arguments for group");
-                return;
-            }
-        };
+    fn group(&mut self, args: GroupArgs) {
+       let tempo = self.tempo_from_repr(args.tempo);
+       let voices: Vec<Voice> = Vec::new();
+       for (idx, update_tempo, p_ids) in args.v_ids_and_flags {
+           // move Voices out of conductor.voices into group.voices
+           let mut voice = self.voices.remove(idx);
+           if update_tempo {
+               // refer to Group TempoState
+               voice.state.tempo = Rc::clone(&tempo);
+               for p in p_ids {
+                   // these Processes also refer to the 
+                   // Group TempoState
+                   let mut process = &voice.processes[p];
+                   process.update_tempo(Rc::clone(&tempo));
+               }
+           }
+           voices.push(voice);
+       }
 
-        // -t tempo -v voices
-
-        let mut tempo_state = Rc::new(RefCell::new(TempoState::new(None)));
-        tempo_state.borrow_mut().init(TempoMode::Group, TempoUnit::Bpm, 240.0);
-        let mut voices = HashMap::<String, Voice>::new();
-
-        let mut t_arg = |t: &str, current: Rc<RefCell<TempoState>>| -> Result<Rc<RefCell<TempoState>>, &'static str> {
-            let u_str = &t[0..=1];
-            if u_str == "c:" {
-                let tc_name = &t[2..];
-                match self.tempo_cons.get(&name.to_string()) {
-                    Some(tc) => return Ok(Rc::clone(tc)),
-                    None => return Err("\nErr: Couldn't find TempoContext"),
-                }
-            } else {
-                let unit = match u_str {
-                    "s:" => TempoUnit::Samples,
-                    "m:" => TempoUnit::Millis,
-                    "b:" => TempoUnit::Bpm,
-                    _ => return Err("\nErr: invalid tempo unit"),
-                };
-                let interval = match &t[2..].parse::<f32>() {
-                    Ok(val) => *val,
-                    Err(_) => return Err("\nErr: invalid interval")
-                };
-           
-                current.borrow_mut().init(TempoMode::Group, unit, interval);
-                Ok(current)
-            }
-        };
-
-        let mut v_arg = |v: &str| -> Result<(), &'static str> {
-            let names: Vec<_> = v.split(',').collect();
-            
-            for name in names {
-                let name = name.to_string();
-                match self.voices.remove(&name) {
-                    Some(voice) => voices.insert(name, voice),
-                    None => return Err("\nErr: couldn't find Voice")
-                };
-            }
-
-            return Ok(());
-        };
-
-        while let Some(arg) = args.next() {
-            match arg {
-                "-t" | "--tempo" => {
-                    match args.next() {
-                        Some(t) => {
-                            tempo_state = match t_arg(t, tempo_state) {
-                                Ok(state) => state,
-                                Err(err) => { println!("{err}"); return; }
-                            }
-                        }
-                        None => {
-                            println!("\nErr: not enough arguments for tempo");
-                            return;
-                        }
-                    };
-                }
-                "-v" | "--voices" => {
-                    match args.next() {
-                        Some(v) => {
-                            match v_arg(v) {
-                                Ok(()) => (),
-                                Err(err) => { println!("{err}"); return; }
-                            }
-                        }
-                        None => {
-                            println!("\nErr: enough arguments for voices");
-                            return;
-                        }
-                    };
-                }
-                _ => {
-                    println!("\nErr: invalid arg '{arg}' for group");
-                    return;
-                }
-            }
-        }
-
-        for (_, voice) in &mut voices {
-            // if the Voice wasn't assigned a TempoState at birth,
-            // it takes on the TempoState of the Group
-            // (this is how a Voice's Process is synced with a Group's TempoState
-            // [by proxy, if the Process refers to its Voice's TempoState])
-            if voice.state.tempo.borrow().mode == TempoMode::TBD {
-                voice.state.tempo = Rc::clone(&tempo_state);
-                for (_, mut process) in &mut voice.processes {
-                    // checks if any Process tempo has TempoMode::TBD
-                    // (i.e. it was assigned to its Voice's
-                    // uninitialized tempo, in anticipation of the
-                    // Voice being added to a Group later)
-                    process.update_tempo(Rc::clone(&tempo_state));
-                }
-            }
-        }
-        
-        let group = Group::new(voices, tempo_state);
-
-        self.groups.insert(name.to_string(), group);
+       let group = Group::new(voices, tempo);
+       self.groups.push(group);
     }
 
     fn tempo_context(&mut self, args: String) {
