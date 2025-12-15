@@ -94,8 +94,6 @@ impl Seq {
     }
 
     fn update_tempo(&mut self, ts: Rc<RefCell<TempoState>>) {
-        if self.state.tempo.borrow().mode == TempoMode::TBD {
-            self.state.tempo = ts;
-        }
+        self.state.tempo = ts;
     }
 }
