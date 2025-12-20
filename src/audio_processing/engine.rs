@@ -193,45 +193,9 @@ impl Conductor {
        self.groups.push(group);
     }
 
-    fn tempo_context(&mut self, args: String) {
-        let mut args = args.split_whitespace();
-        let name = match args.next() {
-            Some(string) => string,
-            None => {
-                println!("\nErr: not enough arguments for tempocon/tc");
-                return;
-            }
-        };
-
-        let tempo = match args.next() {
-            Some(string) => string,
-            None => {
-                println!("\nErr: not enough arguments for tempocon/tc");
-                return;
-            }
-        };
-
-        let unit = match &tempo[0..=1] {
-            "b:" => TempoUnit::Bpm,
-            "m:" => TempoUnit::Millis,
-            "s:" => TempoUnit::Samples,
-            _ => {
-                println!("\nErr: invalid unit for tempo");
-                return;
-            }
-        };
-
-        let interval = match &tempo[2..].parse::<f32>() {
-            Ok(val) => *val,
-            Err(_) => {
-                println!("\nErr: invalid interval for tempo");
-                return;
-            }
-        };
-
-        let tempo_state = Rc::new(RefCell::new(TempoState::new(None)));
-        tempo_state.borrow_mut().init(TempoMode::Context, unit, interval);
-        self.tempo_cons.insert(name.to_string(), tempo_state);
+    fn tempo_context(&mut self, args: TcArgs) {
+        let tempo_state = self.tempo_from_repr(args.tempo);
+        self.tempo_cons.push(tempo_state);
     }
 
     fn seq(&mut self, args: String) {
