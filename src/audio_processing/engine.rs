@@ -109,36 +109,72 @@ impl Conductor {
     
     fn start(&mut self, args: StartArgs) {
         match args.idx {
-            Idx::Voice(idx) => self.voices[idx].start(),
-            Idx::Group(idx) => self.groups[idx].start(),
-            Idx::Tempo(idx) => self.tempo_cons[idx].start(),
+            Idx::Voice(idx) => {
+                let voice = self.voices.get(idx).unwrap();
+                voice.start();
+            }
+            Idx::Group(idx) => {
+                let group = self.groups.get(idx).unwrap();
+                group.start();
+            }
+            Idx::Tempo(idx) => {
+                let tc = self.tempo_cons.get(idx).unwrap();
+                tc.start();
+            }
             _ => (),
         }
     }
 
     fn pause(&mut self, args: PauseArgs) {
         match args.idx {
-            Idx::Voice(idx) => self.voices[idx].pause(),
-            Idx::Group(idx) => self.groups[idx].pause(),
-            Idx::Tempo(idx) => self.tempo_cons[idx].pause(),
+            Idx::Voice(idx) => {
+                let voice = self.voices.get(idx).unwrap();
+                voice.pause();
+            }
+            Idx::Group(idx) => {
+                let group = self.groups.get(idx).unwrap();
+                group.pause();
+            }
+            Idx::Tempo(idx) => {
+                let tc = self.tempo_cons.get(idx).unwrap();
+                tc.pause();
+            }
             _ => (),
         }
     }
 
     fn resume(&mut self, args: ResumeArgs) {
         match args.idx {
-            Idx::Voice(idx) => self.voices[idx].resume(),
-            Idx::Group(idx) => self.groups[idx].resume(),
-            Idx::Tempo(idx) => self.tempo_cons[idx].resume(),
+            Idx::Voice(idx) => {
+                let voice = self.voices.get(idx).unwrap();
+                voice.resume();
+            }
+            Idx::Group(idx) => {
+                let group = self.groups.get(idx).unwrap();
+                group.resume();
+            }
+            Idx::Tempo(idx) => {
+                let tc = self.tempo_cons.get(idx).unwrap();
+                tc.resume();
+            }
             _ => (),
         }
     }
 
     fn stop(&mut self, args: StopArgs) {
         match args.idx {
-            Idx::Voice(idx) => self.voices[idx].stop(),
-            Idx::Group(idx) => self.groups[idx].stop(),
-            Idx::Tempo(idx) => self.tempo_cons[idx].stop(),
+            Idx::Voice(idx) => {
+                let voice = self.voices.get(idx).unwrap();
+                voice.stop();
+            }
+            Idx::Group(idx) => {
+                let group = self.groups.get(idx).unwrap();
+                group.stop();
+            }
+            Idx::Tempo(idx) => {
+                let tc = self.tempo_cons.get(idx).unwrap();
+                tc.stop();
+            }
             _ => (),
         }
     }
@@ -148,7 +184,8 @@ impl Conductor {
     }
 
     fn velocity(&mut self, args: VelocityArgs) {
-        self.voices[args.idx].state.velocity = args.val;
+        let mut voice = self.voices.get(args.idx).unwrap();
+        voice.state.velocity = args.val;
     }
 
     fn group(&mut self, args: GroupArgs) {
@@ -181,9 +218,30 @@ impl Conductor {
 
     // Processes
     //
-
     fn seq(&mut self, args: SeqArgs) {
-    
+        let tempo = self.tempo_from_repr(args.tempo);
+        let state = SeqState {
+            active: true,
+            tempo,
+            period: args.period,
+            steps: args.steps,
+            chance: args.chance,
+            jit: args.jit,
+            rng: args.rng,
+            idx: 0,
+        }
+        
+        match args.idx {
+            Idx::Voice(v) {
+                let mut voice = &self.voices.get(v).unwrap();
+                voice.processes.push(Process::Seq { state });
+            }
+            Idx::Group(g) {
+                let mut group = &self.groups.get(g).unwrap();
+                group.processes.push(Process::Seq { state });
+            }
+            _ => (), // will only be Voice or Group
+        }
     }
 
     // helpers
@@ -398,7 +456,7 @@ pub struct GroupState {
 pub struct Group {
     pub state: GroupState, 
     pub voices: Vec<Voice>,
-    // pub processes: HashMap<String, Process>,
+    pub processes: Vec<Process>,
 }
 
 impl Group {
