@@ -145,6 +145,10 @@ pub struct GroupArgs {
     // whose TempoStates refer to the Group's
 }
 
+pub struct TempoArgs {
+    tempo: TempoRepr,
+}
+
 // doesn't need any members, just triggers raise(SIGTERM)
 pub struct QuitArgs {}
 
@@ -312,7 +316,7 @@ impl CmdProcessor {
             "group" => self.try_group(args),
             "tc" | "tempocon" => self.try_tc(args),
             "seq" => self.try_seq(args),
-            "q" | "quit" => Ok(Command::Quit { QuitArgs }),
+            "q" | "quit" => Ok(Command::Quit(QuitArgs{}),
             _ => return Err(CmdErr::NoCmd { name: cmd.to_owned() }),
         }
     }
@@ -708,6 +712,57 @@ impl CmdProcessor {
                  .collect();
 
         Ok(Command::Group(GroupArgs { tempo, vs_fs_ps }))
+    }
+
+    fn try_tc(&mut self, args: &str) -> CmdResult<Command> {
+        let mut args = args.split_whitespace();
+        let name = args
+            .next()
+            .ok_or(CmdErr::MissingArg { 
+                arg: "name".to_string(), 
+                cmd: "tempocon".to_string() 
+            })?;        
+
+        let tempo = args
+            .next()
+            .ok_or(CmdErr::MissingArg {
+                arg: "-t/--tempo".to_string(),
+                cmd: "tempocon".to_string()
+            })?;
+
+        let tempo = tempo.split(':').collect();
+
+        if tempo.len() != 2 {
+            return Err(CmdErr::Formatting {
+                err: "-t/--tempo must be formatted as unit:interval"
+                     .to_string()
+            });
+        }
+
+        let unit = match tempo[0] {
+            "b" => TempoUnit::Bpm,
+            "m" => TempoUnit::Millis,
+            "s" => TempoUnit::Samples,
+            _ => return Err(CmdErr::InvalidArg {
+                               arg: tempo[0].to_owned(),
+                               cmd: "-t/--tempo".to_string(),
+                            }),
+        };
+
+        let interval = match tempo[1].parse::<f32>() {
+            Ok(val) => *val,
+            Err(_) => return Err(CmdErr::InvalidArg {
+                                    arg: tempo[1].to_owned(),
+                                    cmd: "-t/--tempo".to_string(),
+                                }),
+        };
+
+        let tempo_state = TempoRepr::new(self.tempo_cons.len());
+        tempo_state.init(TempoMode::Context, unit, interval);
+        let ts_clone = TempoRepr::clone(&tempo_state);
+        self.tempo_cons.insert(name.to_string(), tempo_state);
+
+        Ok(Command::Tc(TcArgs { tempo: ts_clone }))
     }
 
     // StateResults (returned to a CmdResult fn)
