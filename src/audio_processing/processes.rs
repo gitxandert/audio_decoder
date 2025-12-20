@@ -55,8 +55,8 @@ pub struct Seq {
 
 pub struct SeqState {
     pub active: bool, // TODO: impl activation methods
-    pub period: usize,
     pub tempo: Rc<RefCell<TempoState>>,
+    pub period: usize,
     pub steps: Vec<f32>,
     pub chance: Vec<f32>,
     pub jit: Vec<f32>,
