@@ -5,6 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use proc_macro::{TokenStream, TokenTree, Ident, Span};
 
 use crate::file_parsing::decode_helpers::AudioFile;
+use crate::audio_processing::{
+    blast_time::blast_time::{TempoUnit, TempoMode},
+    blast_rand::{X128P, fast_seed},
+};
 
 pub struct CmdQueue {
     buf: Vec<UnsafeCell<Option<Command>>>,
@@ -150,7 +154,12 @@ pub struct TcArgs {
 }
 
 pub struct SeqArgs {
-    tempo: TempoRepr, // needs to either be new
+    tempo: TempoRepr,
+    period: usize,
+    steps: Vec<f32>,
+    chance: Vec<f32>,
+    jit: Vec<f32>,
+    rng: X128P,
 }
 
 // doesn't need any members, just triggers raise(SIGTERM)
@@ -265,9 +274,8 @@ pub struct ProcRepr {
     idx: usize, // index of the Process in its owner's
                 // Vec<Process>
 
-    owner_idx: usize, // index of the Process's $owner
+    owner_idx: Idx, // index of the Process's $owner
                       // in the engine's Vec<$owner>
-    
     tempo: Option<TempoRepr>,
     // maybe create ProcArgs enum, one for each Process
 }
@@ -441,10 +449,10 @@ impl CmdProcessor {
                         })
                         .and_then(|raw| {
                             raw.parse::<f32>()
-                                .map_err(|_| CmdErr::InvalidArg { 
+                               .map_err(|_| CmdErr::InvalidArg { 
                                     arg: raw.to_owned(), 
                                     cmd: "load -t".to_string() 
-                                })
+                               })
                         })?;
 
                     tempo_repr.init(TempoMode::Voice, unit, interval);
@@ -540,10 +548,10 @@ impl CmdProcessor {
             })
             .and_then(|raw| {
                 raw.parse::<f32>()
-                    .map_err(|_| CmdErr::InvalidArg{ 
+                   .map_err(|_| CmdErr::InvalidArg { 
                         arg: raw.to_owned(), 
                         cmd: "velocity".to_string() 
-                    })
+                   })
             })?;
 
         Ok(Command::Velocity(VelocityArgs{ idx, val }))
@@ -598,14 +606,18 @@ impl CmdProcessor {
                         cmd: "group -t".to_string() 
                     }),
                 };
-                let interval = t_args.next()
-                    .ok_or(StateErr::MissingArg { arg: "interval".to_string(), cmd: "group -t".to_string() })
+                let interval = t_args
+                    .next()
+                    .ok_or(StateErr::MissingArg { 
+                        arg: "interval".to_string(), 
+                        cmd: "group -t".to_string() 
+                    })
                     .and_then(|raw| {
                         raw.parse::<f32>()
-                            .map_err(|_| StateErr::InvalidArg { 
+                           .map_err(|_| StateErr::InvalidArg { 
                                 arg: raw.to_owned(), 
                                 cmd: "group -t".to_string() 
-                            })
+                           })
                     })?;
                 
                 let mut new_tempo = TempoRepr::new(0);
@@ -741,36 +753,34 @@ impl CmdProcessor {
         let tempo = args
             .next()
             .ok_or(CmdErr::MissingArg {
-                arg: "-t/--tempo".to_string(),
+                arg: "tempo".to_string(),
                 cmd: "tempocon".to_string()
             })?;
 
         let tempo = tempo.split(':').collect();
 
         if tempo.len() != 2 {
-            return Err(CmdErr::Formatting {
-                err: "-t/--tempo must be formatted as unit:interval"
-                     .to_string()
-            });
+            return Err(CmdErr::TempoFormatting);
         }
 
-        let unit = match tempo[0] {
+        let u = tempo.get(0).unwrap();
+        let unit = match u {
             "b" => TempoUnit::Bpm,
             "m" => TempoUnit::Millis,
             "s" => TempoUnit::Samples,
             _ => return Err(CmdErr::InvalidArg {
-                               arg: tempo[0].to_owned(),
+                               arg: u.to_owned(),
                                cmd: "-t/--tempo".to_string(),
                             }),
         };
 
-        let interval = match tempo[1].parse::<f32>() {
-            Ok(val) => *val,
-            Err(_) => return Err(CmdErr::InvalidArg {
+        let int_str = tempo.get(1).unwrap();
+        let interval = int_str
+                       .parse::<f32>()
+                       .map_err(|_| CmdErr::InvalidArg {
                                     arg: tempo[1].to_owned(),
                                     cmd: "-t/--tempo".to_string(),
-                                }),
-        };
+                       });
 
         let tempo_state = TempoRepr::new(self.tempo_cons.len());
         tempo_state.init(TempoMode::Context, unit, interval);
@@ -780,27 +790,22 @@ impl CmdProcessor {
         Ok(Command::Tc(TcArgs { tempo: ts_clone }))
     }
 
+    // TODO: make able to apply to Group
     fn try_seq(&mut self, args: &str) {
         let mut args = args.split_whitespace();
-        let name = match args.next() {
-            Some(string) => string,
-            None => {
-                println!("\nErr: not enough arguments for velocity");
-                return;
-            }
-        };
-        let name = name.to_string();
+        let name = args
+            .next()
+            .ok_or(CmdErr::MissingArg { 
+                arg: "name".to_string(), 
+                cmd: "seq".to_string() 
+            })?;
 
-        let voice = match self.voices.get_mut(&name) {
-            Some(v) => v,
-            None => {
-                println!("\nErr: Couldn't find voice '{name}'");
-                return;
-            }
-        };
+        // TODO: let object? something more flexible
+        let voice = self.find_voice(name)?;
 
-        let mut period: usize = sample_rate::get() as usize;
-        let mut tempo: Rc<RefCell<TempoState>> = Rc::new(RefCell::new(TempoState::new(Some(TempoMode::Process))));
+        // default assign to Process
+        let mut tempo: TempoState = TempoRepr::new(voice.proc_tempi.len());
+        let mut period: usize = 4;
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
@@ -810,112 +815,99 @@ impl CmdProcessor {
         while let Some(arg) = args.next() {
             match arg {
                 "-t" | "--tempo" => {
-                    let t_arg = match args.next() {
-                        Some(arg) => arg,
-                        None => {
-                            println!("\nErr: not enough arguments for seq");
-                            return;
-                        }
-                    };
+                    let t_arg = args
+                        .next()
+                        .ok_or(CmdErr::MissingArg {
+                            arg: "unit:interval".to_string(),
+                            cmd: "seq -t".to_string(),
+                        })?;
 
-                    let mut t_args = t_arg.split(':');
+                    let t_args = t_arg.split(':').collect();
 
-                    let u = t_args.next().unwrap();
+                    if t_args.len() != 2 {
+                        return Err(CmdErr::TempoFormatting);
+                    }
+
+                    let u = t_args.get(0).unwrap();
 
                     if u == "c" {
                         // find TempoContext
-                        let tc_name = match t_args.next() {
-                            Some(tc) => tc,
-                            None => {
-                                println!("\nErr: not enough arguments to find TempoContext");
-                                return;
-                            }
-                        };
-                        let tc_name = tc_name.to_string();
-                        tempo = match self.tempo_cons.get(&tc_name) {
-                            Some(tc) => {
-                                Rc::clone(tc);
-                                continue;
-                            }
-                            None => {
-                                println!("\nErr: no TempoContext with the name {tc_name}");
-                                return;
-                            }
-                        };
+                        let tc = self.find_tc(t_args.get(1).unwrap())?;
+                        tempo = TempoRepr::clone_owner(&tc);
+                        continue;
+                    }
+
+                    if u == "g" {
+                        // find Group
+                        let g = self.find_group(t_args.get(1).unwrap())?;
+                        tempo = TempoRepr::clone_owner(&group.state.tempo);
                         continue;
                     }
 
                     if u == "v" {
-                        // refer to Voice's TempoState;
-                        // if Voice's TempoState is a Group's, Seq will run when this Group does
-                        tempo = Rc::clone(&voice.state.tempo);
+                        // refer to Voice's TempoState
+                        tempo = TempoRepr::clone_owner(&voice.state.tempo);
                         continue;
                     }
+
+                    // if not referring, then init new TempoState
 
                     let unit = match u {
                         "s" => TempoUnit::Samples,
                         "m" => TempoUnit::Millis,
                         "b" => TempoUnit::Bpm,
-                        _ => {
-                            println!("\nErr: unrecognized time unit for tempo");
-                            return;
-                        }
+                        _ => return Err(CmdErr::InvalidArg {
+                            arg: u.to_owned(), cmd: "seq -t".to_string()
+                        }),
                     };
 
-                    let mut interval = 0.0;
+                    let int_str = t_args.get(1).unwrap();
+                    let interval = int_str
+                                .parse::<f32>()
+                                .map_err(|_| CmdErr::InvalidArg { 
+                                    arg: int_str.to_owned(), 
+                                    cmd: "seq -t".to_string() 
+                                });
 
-                    if let Some(int) = t_args.next() {
-                        match int.parse::<f32>() {
-                            Ok(val) => interval = val,
-                            Err(_) => {
-                                println!("\nErr: invalid tempo interval");
-                                return;
-                            }
-                        }
-                    } else {
-                        println!("\nErr: missing interval argument for tempo");
-                        return;
-                    }
 
-                    let tempo_ref = Rc::new(RefCell::new(TempoState::new(None)));
-                    tempo_ref.borrow_mut().init(TempoMode::Process, unit, interval);
-
-                    tempo = Rc::clone(&tempo_ref);
+                    let tempo_ref = TempoRepr::new(None);
+                    tempo_ref.init(TempoMode::Process, unit, interval);
+                    tempo = TempoRepr::clone(&tempo_ref);
 
                     voice.proc_tempi.push(tempo_ref);
                 }
                 "-p" | "--period" => {
-                    period = match args.next() {
-                        Some(arg) => match arg.parse::<f32>() {
-                            Ok(val) => val as usize,
-                            Err(_) => {
-                                println!("\nErr: invalid argument for period");
-                                return;
-                            }
-                        }
-                        None => {
-                            println!("\nErr: not enough arguments for seq");
-                            return;
-                        }
-                    };
+                    period = args
+                        .next()
+                        .ok_or(CmdErr::MissingArg { 
+                            arg: "value".to_string(), 
+                            cmd: "seq -p".to_string() 
+                        })
+                        .and_then(|raw| 
+                            raw.parse::<f32>()
+                               .map_err(|_| CmdErr::InvalidArg { 
+                                   arg: raw.to_owned(), 
+                                   cmd: "seq -p".to_string() 
+                               })
+                        )?;
                 }
                 "-s" | "--steps" => {
-                    let s_arg = match args.next() {
-                        Some(arg) => arg,
-                        None => {
-                            println!("\nErr: not enough arguments for steps");
-                            return;
-                        }
-                    };
+                    let s_arg = args
+                        .next()
+                        .ok_or(CmdErr::MissingArg {
+                            arg: "value".to_string(),
+                            cmd: "seq -s".to_string(),
+                        })?;
+
                     let step_strs: Vec<&str> = s_arg.split(',').collect();
 
                     for step in step_strs {
                         match step.parse::<f32>() {
                             Ok(val) => steps.push(val),
-                            Err(_) => {
-                                println!("\nErr: invalid argument {step} for steps");
-                                return;
-                            }
+                            Err(_) => return Err(CmdErr::InvalidArg {
+                                    arg: step.to_owned(),
+                                    cmd: "seq -s".to_string(),
+                                }),
                         }
                     }
 
@@ -934,17 +926,16 @@ impl CmdProcessor {
                     //// n1-n2 contiguous steps
 
                     if steps.len() < 1 {
-                        println!("\nErr: provide arguments to -s/--steps before -c/--chance or -j/--jitter");
-                        return;
+                        return Err(CmdErr::Formatting {
+                            err: "Must provide arguments to -s/--steps before -c/--chance or -j/--jitter".to_string()
+                        });
                     }
 
-                    let c_arg = match args.next() {
-                        Some(arg) => arg,
-                        None => {
-                            println!("\nErr: not enough arguments for chance");
-                            return;
-                        }
-                    };
+                    let c_arg = args.next().ok_or(CmdErr::MissingArg {
+                        arg: "value".to_string(),
+                        cmd: "seq -c".to_string(),
+                    })?;
+
                     let c_strs: Vec<&str> = c_arg.split(',').collect();
 
                     let mut spec_char = |s: &str| -> Option<char> {
@@ -976,23 +967,22 @@ impl CmdProcessor {
                                     '_' => chance[i] = 100.0,
                                     ':' => {
                                         let at_index: Vec<&str> = string.split(':').collect();
-                                        if at_index.len() < 2 {
-                                            println!("\nErr: not enough arguments for :");
-                                            return;
-                                        } else if at_index.len() > 2 {
-                                            println!("\nErr: too many arguments for :");
-                                            return;
+                                        if at_index.len() != 2 {
+                                            return Err(
+                                                CmdErr::Formatting {
+                                                    err: "Indexed chance arguments must be formatted beat:chance".to_string(),
+                                                }
+                                            );
                                         }
 
                                         // get chance first in case index = 'a'
                                         let chance_str = at_index.get(1).unwrap();
-                                        let chance_val = match chance_str.parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {chance_str} for change");
-                                                return;
-                                            }
-                                        };
+                                        let chance_val = chance_str
+                                            .parse::<f32>()
+                                            .map_err(|_| CmdErr::InvalidArg {
+                                                arg: chance_str.to_owned(),
+                                                cmd: "seq -c".to_string(),
+                                            });
 
                                         let index_str = at_index.get(0).unwrap();
 
@@ -1004,71 +994,67 @@ impl CmdProcessor {
                                             continue;
                                         }
 
-                                        let index = match index_str.parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {index_str} for chance");
-                                                return;
-                                            }
-                                        };
+                                        let index = index_str
+                                                    .parse::<f32>()
+                                                    .map_err(|_| CmdErr::InvalidArg {
+                                                        arg: index_str.to_owned(),
+                                                        cmd: "seq -c".to_string(),
+                                                    });
                                         
-                                        let mut found = false;
                                         for i in {0..steps.len()} {
                                             let step = *steps.get(i).unwrap();
                                             if index == step {
                                                 chance[i] = chance_val;
-                                                found = true;
                                                 break;
                                             }
-                                        }
-
-                                        if !found {
-                                            println!("\nErr: {index} not in steps");
-                                            return;
+                                            // only reaches here if index isn't found
+                                            return Err(CmdErr::Formatting {
+                                                err: "Invalid index for seq -c".to_string()
+                                            });
                                         }
                                     }
                                     '-' => {
                                         let at_indices: Vec<&str> = string.split(':').collect();
-                                        if at_indices.len() < 2 {
-                                            println!("\nErr: not enough arguments for :");
-                                            return;
-                                        } else if at_indices.len() > 2 {
-                                            println!("\nErr: too many arguments for :");
-                                            return;
+                                        if at_indices.len() != 2 {
+                                            return Err(
+                                                CmdErr::Formatting {
+                                                    err: "Ranged chance arguments must be formatted range:chance".to_string(),
+                                                }
+                                            );
                                         }
                                         
                                         let chance_str = at_indices.get(1).unwrap();
-                                        let chance_val = match chance_str.parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {chance_str} for change");
-                                                return;
-                                            }
-                                        };
+                                        let chance_val = chance_str
+                                                         .parse::<f32>()
+                                                         .map_err(|_| CmdErr::InvalidArg {
+                                                            arg: chance_str.to_owned(),
+                                                            cmd: "seq -c".to_string(),
+                                                         });
 
-                                        let indices: Vec<&str> = at_indices[0].split('-').collect();
-                                        if indices.len() < 2 {
-                                            println!("\nErr: not enough arguments for -");
-                                            return;
-                                        } else if indices.len() > 2 {
-                                            println!("\nErr: too many arguments for -");
-                                            return;
+                                        let indices = at_indices.get(0).unwrap();
+                                        let indices: Vec<&str> = indices.split('-').collect();
+                                        if indices.len() != 2 {
+                                            return Err(
+                                                CmdErr::Formatting {
+                                                    err: "Ranges must be formatted lower-upper".to_string(),
+                                                }
+                                            );
                                         }
 
-                                        let idx1 = match indices[0].parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {} for -", indices[0]);
-                                                return;
-                                            }
-                                        };
-                                        let idx2 = match indices[1].parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {} for -", indices[1]);
-                                                return;
-                                            }
-                                        };
+                                        let i1_str = indices.get(0).unwrap();
+                                        let idx1 = i1_str
+                                                   .parse::<f32>()
+                                                   .map_err(|_| CmdErr::InvalidArg {
+                                                        arg: i1_str.to_owned(),
+                                                        cmd: "seq -c".to_string(),
+                                                   });
+                                        let i2_str = indices.get(0).unwrap();
+                                        let idx2 = i2_str
+                                                   .parse::<f32>()
+                                                   .map_err(|_| CmdErr::InvalidArg {
+                                                        arg: i2_str.to_owned(),
+                                                        cmd: "seq -c".to_string(),
+                                                   });
 
                                         let mut lower = idx1;
                                         let mut upper = idx2;
@@ -1080,8 +1066,9 @@ impl CmdProcessor {
                         
                                         // only check against lower because who cares if upper is too high
                                         if lower > *steps.get(steps.len() - 1).unwrap() {
-                                            println!("\nErr: range {lower}-{upper} applies to nothing");
-                                            return;
+                                            return Err(CmdErr::Formatting {
+                                                err: "seq -c range applies to nothing".to_string()
+                                            });
                                         }
 
                                         for idx in {0..steps.len()} {
@@ -1096,13 +1083,12 @@ impl CmdProcessor {
                             }
                             // no special chars; just assign value at current index
                             None => {
-                                let chance_val = match string.parse::<f32>() {
-                                    Ok(val) => val,
-                                    Err(_) => {
-                                        println!("\nErr: invalid argument {string} for chance");
-                                        return;
-                                    }
-                                };
+                                let chance_val = string
+                                                 .parse::<f32>()
+                                                 .map_err(|_| CmdErr::InvalidArg { 
+                                                     arg: string.to_owned(), 
+                                                     cmd: "seq -c".to_string() 
+                                                 });
                                 chance[i] = chance_val;
                             }
                         }
@@ -1120,25 +1106,28 @@ impl CmdProcessor {
                     // n1-n2,e1-2|l1-l2 specifies jitter ranges for
                     //// n1-n2 contiguous steps
                 }
-                _ => break,
+                _ => return Err(CmdErr::InvalidArg { arg: arg.to_owned(), cmd: "seq".to_string() }),
             }
         }
 
-        let state = SeqState {
-            active: true,
+        // TODO: allow for Idx::Group
+        let repr = ProcRepr { self.processes.len(), Idx::Voice(voice.idx), Some(TempoRepr::clone(&tempo)) };
+        voice.processes.insert("seq".to_string(), repr);
+        // push tempo to proc_tempi only if owned by the Process
+        if tempo.mode == TempoMode::Process {
+            voice.proc_tempi.insert("seq".to_string(), TempoRepr::clone(&tempo);
+        }
+
+        let args = SeqArgs {
+            tempo
             period,
-            tempo,
             steps,
             chance,
             jit,
             rng,
-            idx: 0,
         };
 
-        voice.processes.insert(
-            "seq".to_string(), 
-            Process::Seq(Seq { state })
-        );
+        Ok(Command::Seq(args))
     }
 
     // StateResults (returned to a CmdResult fn)
@@ -1296,7 +1285,8 @@ macro_rules! cmd_errors {
 }
 
 cmd_errors! {
-    Formatting { err: String },
+    TempoFormatting,
+    Formatting { err: String }, // generic
     MissingArg { arg: String, cmd: String },
     InvalidArg { arg: String, cmd: String },
     AlreadyIs { ty: String, name: String },
@@ -1312,6 +1302,9 @@ use std::fmt;
 impl fmt::Display for CmdErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CmdErr::TempoFormatting => {
+                write!(f, "-t/--tempo must be formatted as unit:interval")
+            }
             CmdErr::Formatting { err } => {
                 // verbatim, must explain in context
                 write!(f, "{}", err)
