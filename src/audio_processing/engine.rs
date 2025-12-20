@@ -106,26 +106,7 @@ impl Conductor {
         self.voices.push(Voice::new(track, tempo_state);
     }
 
-    fn tempo_from_repr(&mut self, tr: TempoRepr) -> Rc<RefCell<TempoState>> {
-        // either create (and init) a new TempoState,
-        // or find the referenced one within Groups or Contexts
-        let mut tempo = Rc::new(RefCell::new(TempoState::new(None)));
-        match tr.mode {
-            TempoMode::Voice => {
-                tempo.borrow_mut().init(tr.mode, tr.unit, tr.interval);
-            },
-            TempoMode::Group => {
-                tempo = Rc::clone(&self.groups[tr.idx].state.tempo);
-            }
-            TempoMode::Context => {
-                tempo = Rc::clone(&self.tempo_cons[tr.idx]);
-            }
-            TempoMode::TBD => (),
-        }
-
-        tempo
-    }
-
+    
     fn start(&mut self, args: StartArgs) {
         match args.idx {
             Idx::Voice(idx) => self.voices[idx].start(),
@@ -198,366 +179,39 @@ impl Conductor {
         self.tempo_cons.push(tempo_state);
     }
 
-    fn seq(&mut self, args: String) {
-        let mut args = args.split_whitespace();
-        let name = match args.next() {
-            Some(string) => string,
-            None => {
-                println!("\nErr: not enough arguments for velocity");
-                return;
-            }
-        };
-        let name = name.to_string();
+    // Processes
+    //
 
-        let voice = match self.voices.get_mut(&name) {
-            Some(v) => v,
-            None => {
-                println!("\nErr: Couldn't find voice '{name}'");
-                return;
-            }
-        };
+    fn seq(&mut self, args: SeqArgs) {
+    
+    }
 
-        let mut period: usize = sample_rate::get() as usize;
-        let mut tempo: Rc<RefCell<TempoState>> = Rc::new(RefCell::new(TempoState::new(Some(TempoMode::Process))));
-        let mut steps: Vec<f32> = Vec::new();
-        let mut chance: Vec<f32> = Vec::new();
-        let mut jit: Vec<f32> = Vec::new();
-        // implement user-defined seed l8r
-        let mut rng = X128P::new(fast_seed());
-
-        while let Some(arg) = args.next() {
-            match arg {
-                "-t" | "--tempo" => {
-                    let t_arg = match args.next() {
-                        Some(arg) => arg,
-                        None => {
-                            println!("\nErr: not enough arguments for seq");
-                            return;
-                        }
-                    };
-
-                    let mut t_args = t_arg.split(':');
-
-                    let u = t_args.next().unwrap();
-
-                    if u == "c" {
-                        // find TempoContext
-                        let tc_name = match t_args.next() {
-                            Some(tc) => tc,
-                            None => {
-                                println!("\nErr: not enough arguments to find TempoContext");
-                                return;
-                            }
-                        };
-                        let tc_name = tc_name.to_string();
-                        tempo = match self.tempo_cons.get(&tc_name) {
-                            Some(tc) => {
-                                Rc::clone(tc);
-                                continue;
-                            }
-                            None => {
-                                println!("\nErr: no TempoContext with the name {tc_name}");
-                                return;
-                            }
-                        };
-                        continue;
-                    }
-
-                    if u == "v" {
-                        // refer to Voice's TempoState;
-                        // if Voice's TempoState is a Group's, Seq will run when this Group does
-                        tempo = Rc::clone(&voice.state.tempo);
-                        continue;
-                    }
-
-                    let unit = match u {
-                        "s" => TempoUnit::Samples,
-                        "m" => TempoUnit::Millis,
-                        "b" => TempoUnit::Bpm,
-                        _ => {
-                            println!("\nErr: unrecognized time unit for tempo");
-                            return;
-                        }
-                    };
-
-                    let mut interval = 0.0;
-
-                    if let Some(int) = t_args.next() {
-                        match int.parse::<f32>() {
-                            Ok(val) => interval = val,
-                            Err(_) => {
-                                println!("\nErr: invalid tempo interval");
-                                return;
-                            }
-                        }
-                    } else {
-                        println!("\nErr: missing interval argument for tempo");
-                        return;
-                    }
-
-                    let tempo_ref = Rc::new(RefCell::new(TempoState::new(None)));
-                    tempo_ref.borrow_mut().init(TempoMode::Process, unit, interval);
-
-                    tempo = Rc::clone(&tempo_ref);
-
-                    voice.proc_tempi.push(tempo_ref);
+    // helpers
+    //
+    fn tempo_from_repr(&mut self, tr: TempoRepr) -> Rc<RefCell<TempoState>> {
+        // either create (and init) a new TempoState,
+        // or find the referenced one within Groups or Contexts
+        let mut tempo = Rc::new(RefCell::new(TempoState::new(None)));
+        if tr.owned {
+            tempo = borrow_mut().init(tr.mode, tr.unit, tr.interval);
+        } else {
+            match tr.mode {
+                TempoMode::Voice => {
+                    tempo = Rc::clone(&self.voices[tr.idx].state.tempo);
                 }
-                "-p" | "--period" => {
-                    period = match args.next() {
-                        Some(arg) => match arg.parse::<f32>() {
-                            Ok(val) => val as usize,
-                            Err(_) => {
-                                println!("\nErr: invalid argument for period");
-                                return;
-                            }
-                        }
-                        None => {
-                            println!("\nErr: not enough arguments for seq");
-                            return;
-                        }
-                    };
+                TempoMode::Group => {
+                    tempo = Rc::clone(&self.groups[tr.idx].state.tempo);
                 }
-                "-s" | "--steps" => {
-                    let s_arg = match args.next() {
-                        Some(arg) => arg,
-                        None => {
-                            println!("\nErr: not enough arguments for steps");
-                            return;
-                        }
-                    };
-                    let step_strs: Vec<&str> = s_arg.split(',').collect();
-
-                    for step in step_strs {
-                        match step.parse::<f32>() {
-                            Ok(val) => steps.push(val),
-                            Err(_) => {
-                                println!("\nErr: invalid argument {step} for steps");
-                                return;
-                            }
-                        }
-                    }
-
-                    // set chance and jit Vecs to same len as steps
-                    // to avoid panics
-                    chance.resize(steps.len(), 100f32);
-                    jit.resize(steps.len(), 100f32);
+                TempoMode::Context => {
+                    tempo = Rc::clone(&self.tempo_cons[tr.idx]);
                 }
-                "-c" | "--chance" => {
-                    // a value specifies chance for the step
-                    //// at the same index as the value
-                    // _ is shorthand for 100
-                    // n:val specifies chance=val for step=n
-                    // a:val sets the same chance=val for all steps
-                    // n1-n2:val specifies a chance=val for
-                    //// n1-n2 contiguous steps
-
-                    if steps.len() < 1 {
-                        println!("\nErr: provide arguments to -s/--steps before -c/--chance or -j/--jitter");
-                        return;
-                    }
-
-                    let c_arg = match args.next() {
-                        Some(arg) => arg,
-                        None => {
-                            println!("\nErr: not enough arguments for chance");
-                            return;
-                        }
-                    };
-                    let c_strs: Vec<&str> = c_arg.split(',').collect();
-
-                    let mut spec_char = |s: &str| -> Option<char> {
-                        for c in s.chars() {
-                            match c {
-                                '_' => return Some('_'),
-                                ':' => return Some(':'),
-                                '-' => return Some('-'),
-                                _ => continue,
-                            }
-                        }
-                        None
-                    };
-                    
-                    // use chance.len() if too many arguments were provided
-                    let len = {
-                        if c_strs.len() > chance.len() {
-                            chance.len()
-                        } else {
-                            c_strs.len()
-                        }
-                    };
-
-                    for i in {0..len} {
-                        let string = c_strs.get(i).unwrap();
-                        match spec_char(string) {
-                            Some(c) => {
-                                match c {
-                                    '_' => chance[i] = 100.0,
-                                    ':' => {
-                                        let at_index: Vec<&str> = string.split(':').collect();
-                                        if at_index.len() < 2 {
-                                            println!("\nErr: not enough arguments for :");
-                                            return;
-                                        } else if at_index.len() > 2 {
-                                            println!("\nErr: too many arguments for :");
-                                            return;
-                                        }
-
-                                        // get chance first in case index = 'a'
-                                        let chance_str = at_index.get(1).unwrap();
-                                        let chance_val = match chance_str.parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {chance_str} for change");
-                                                return;
-                                            }
-                                        };
-
-                                        let index_str = at_index.get(0).unwrap();
-
-                                        // if index = 'a', set all chance vals to chance_val and continue
-                                        if *index_str == "a" {
-                                            for i in {0..chance.len()} {
-                                                chance[i] = chance_val;
-                                            }
-                                            continue;
-                                        }
-
-                                        let index = match index_str.parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {index_str} for chance");
-                                                return;
-                                            }
-                                        };
-                                        
-                                        let mut found = false;
-                                        for i in {0..steps.len()} {
-                                            let step = *steps.get(i).unwrap();
-                                            if index == step {
-                                                chance[i] = chance_val;
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-
-                                        if !found {
-                                            println!("\nErr: {index} not in steps");
-                                            return;
-                                        }
-                                    }
-                                    '-' => {
-                                        let at_indices: Vec<&str> = string.split(':').collect();
-                                        if at_indices.len() < 2 {
-                                            println!("\nErr: not enough arguments for :");
-                                            return;
-                                        } else if at_indices.len() > 2 {
-                                            println!("\nErr: too many arguments for :");
-                                            return;
-                                        }
-                                        
-                                        let chance_str = at_indices.get(1).unwrap();
-                                        let chance_val = match chance_str.parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {chance_str} for change");
-                                                return;
-                                            }
-                                        };
-
-                                        let indices: Vec<&str> = at_indices[0].split('-').collect();
-                                        if indices.len() < 2 {
-                                            println!("\nErr: not enough arguments for -");
-                                            return;
-                                        } else if indices.len() > 2 {
-                                            println!("\nErr: too many arguments for -");
-                                            return;
-                                        }
-
-                                        let idx1 = match indices[0].parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {} for -", indices[0]);
-                                                return;
-                                            }
-                                        };
-                                        let idx2 = match indices[1].parse::<f32>() {
-                                            Ok(val) => val,
-                                            Err(_) => {
-                                                println!("\nErr: invalid argument {} for -", indices[1]);
-                                                return;
-                                            }
-                                        };
-
-                                        let mut lower = idx1;
-                                        let mut upper = idx2;
-
-                                        if lower > upper {
-                                            lower = idx2;
-                                            upper = idx1;
-                                        }
-                        
-                                        // only check against lower because who cares if upper is too high
-                                        if lower > *steps.get(steps.len() - 1).unwrap() {
-                                            println!("\nErr: range {lower}-{upper} applies to nothing");
-                                            return;
-                                        }
-
-                                        for idx in {0..steps.len()} {
-                                            let step = *steps.get(idx).unwrap();
-                                            if step >= lower && step <= upper {
-                                                chance[idx] = chance_val;
-                                            }
-                                        }
-                                    }
-                                    _ => (),
-                                }
-                            }
-                            // no special chars; just assign value at current index
-                            None => {
-                                let chance_val = match string.parse::<f32>() {
-                                    Ok(val) => val,
-                                    Err(_) => {
-                                        println!("\nErr: invalid argument {string} for chance");
-                                        return;
-                                    }
-                                };
-                                chance[i] = chance_val;
-                            }
-                        }
-                    }                   
-                }
-                "-j" | "--jitter" => {
-                    // a value specifies jitter for the step
-                    //// at the same index as the value
-                    // _ means no jitter
-                    // e|l indicates jitter before=e and after=l the beat
-                    //// (of ranges e-0.0 and 0.0-l)
-                    // e1-e2|l1-l2 indicate jitter ranges
-                    // n:e|l specifies jitter=e|l for step=n
-                    // a:e|l specifies jitter=e|l for all steps
-                    // n1-n2,e1-2|l1-l2 specifies jitter ranges for
-                    //// n1-n2 contiguous steps
-                }
-                _ => break,
+                TempoMode::TBD => (),
             }
         }
 
-        let state = SeqState {
-            active: true,
-            period,
-            tempo,
-            steps,
-            chance,
-            jit,
-            rng,
-            idx: 0,
-        };
-
-        voice.processes.insert(
-            "seq".to_string(), 
-            Process::Seq(Seq { state })
-        );
+        tempo
     }
+
 }
 
 pub struct VoiceState {
