@@ -1,11 +1,5 @@
-[package]
-name = "blast"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-alsa-sys = "0.3.1"
-libc = "0.2.177"
-
-[lib]
-proc-macro = true
+[workspace]
+members = [
+  "blast",
+  "blast_macros",
+]
