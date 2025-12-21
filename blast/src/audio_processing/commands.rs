@@ -673,10 +673,13 @@ impl CmdProcessor {
                                 }
                             }
 
-                            let mut sorted_ids = v_ids.clone();
-                            sorted_ids.sort_by(|a, b| b.cmp(a));
+                            // sort removed voices in reverse
+                            // so that the remaining voice.idx
+                            // are decremented correctly
+                            let mut sorted = v_ids.clone();
+                            sorted.sort_by(|a, b| b.cmp(a));
 
-                            for removed_id in sorted_ids {
+                            for removed_id in sorted {
                                 for (_, v) in &mut self.engine_state.voices {
                                     if v.idx > removed_id {
                                         v.idx -= 1;
@@ -741,12 +744,19 @@ impl CmdProcessor {
 
         self.engine_state.groups.insert(name.to_string(), group);
 
-        let vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = 
+        let mut vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = 
             v_ids.into_iter()
                  .zip(v_flags)
                  .zip(p_ids)
                  .map(|((a, b), c) | (a, b, c))
                  .collect();
+        // sort in reverse so that Voices are removed from
+        // Conductor.voices in reverse
+        vs_fs_ps.sort_by(|a, b| {
+            let (va, _, _) = a;
+            let (vb, _, _) = b;
+            vb.cmp(va)
+        });
 
         Ok(Command::Group(GroupArgs { tempo, vs_fs_ps }))
     }
