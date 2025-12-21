@@ -205,7 +205,7 @@ impl TempoRepr {
         }
     }
 
-    fn clone(other: &TempoRepr) -> Self {
+    pub fn clone(other: &TempoRepr) -> Self {
         Self {
             idx: other.idx,
             owned: other.owned,
@@ -479,25 +479,33 @@ impl CmdProcessor {
     // maybe implement "all" as a reserved word
     //
     fn try_start(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(args)?;
+        let (ty, name) = self.parse_type_and_name(
+            args, "start".to_string()
+        )?;
         let idx = self.get_idx(ty, name)?;
         Ok(Command::Start(StartArgs{ idx }))
     }
 
     fn try_pause(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(args)?;
+        let (ty, name) = self.parse_type_and_name(
+            args, "pause".to_string()
+        )?;
         let idx = self.get_idx(ty, name)?;
         Ok(Command::Pause(PauseArgs{ idx }))
     } 
 
     fn try_resume(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(args)?;
+        let (ty, name) = self.parse_type_and_name(
+            args, "resume".to_string()
+        )?;
         let idx = self.get_idx(ty, name)?;
         Ok(Command::Resume(ResumeArgs{ idx }))
     }  
 
     fn try_stop(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(args)?;
+        let (ty, name) = self.parse_type_and_name(
+            args, "stop".to_string()
+        )?;
         let idx = self.get_idx(ty, name)?;
         Ok(Command::Stop(StopArgs{ idx }))
     } 
@@ -804,12 +812,14 @@ impl CmdProcessor {
                 arg: "name".to_string(), 
                 cmd: "seq".to_string() 
             })?;
-
-        // TODO: let object? something more flexible
-        let voice = self.find_voice(name.to_string())?;
+        let name = name.to_string();
 
         // default assign to Process
-        let mut tempo: TempoRepr = TempoRepr::new(voice.proc_tempi.len());
+        let mut tempo: TempoRepr = {
+            // TODO: find object? needs to be more generic
+            let voice = self.find_voice(name.clone())?;
+            TempoRepr::new(voice.proc_tempi.len())
+        };
         let mut period: usize = 4;
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
@@ -855,12 +865,15 @@ impl CmdProcessor {
 
                     if *u == "v" {
                         // refer to Voice's TempoState
-                        tempo = TempoRepr::clone_owner(&voice.tempo);
+                        tempo = {
+                            let voice = self.find_voice(name.clone())?;
+                            TempoRepr::clone_owner(&voice.tempo)
+                        };
                         continue;
                     }
 
                     // if not referring, then init new TempoState
-
+                    //
                     let unit = match *u {
                         "s" => TempoUnit::Samples,
                         "m" => TempoUnit::Millis,
@@ -879,14 +892,7 @@ impl CmdProcessor {
                                     cmd: "seq -t".to_string() 
                                 })?;
 
-                    let mut tempo_ref = TempoRepr::new(voice.proc_tempi.len());
-                    tempo_ref.init(TempoMode::Process, unit, interval);
-                    tempo = TempoRepr::clone(&tempo_ref);
-
-                    voice.proc_tempi.insert(
-                        voice.proc_tempi.len(),
-                        tempo_ref
-                    );
+                    tempo.init(TempoMode::Process, unit, interval);
                 }
                 "-p" | "--period" => {
                     period = args
@@ -1123,11 +1129,19 @@ impl CmdProcessor {
         }
 
         // TODO: allow for Idx::Group
-        let repr = ProcRepr::new(voice.processes.len(), Idx::Voice(voice.idx), Some(TempoRepr::clone(&tempo)));
+        let voice = self.find_voice(name.clone())?;
+        let repr = ProcRepr::new(
+            voice.processes.len(), 
+            Idx::Voice(voice.idx), 
+            Some(TempoRepr::clone(&tempo))
+        );
         voice.processes.insert("seq".to_string(), repr);
         // push tempo to proc_tempi only if owned by the Process
         if tempo.mode == TempoMode::Process {
-            voice.proc_tempi.insert(voice.proc_tempi.len(), TempoRepr::clone(&tempo));
+            voice.proc_tempi.insert(
+                voice.proc_tempi.len(), 
+                TempoRepr::clone(&tempo)
+            );
         }
 
         let args = SeqArgs {
@@ -1145,19 +1159,19 @@ impl CmdProcessor {
 
     // StateResults (returned to a CmdResult fn)
     //
-    fn parse_type_and_name(&self, args: String) -> StateResult<(String, String)> {
+    fn parse_type_and_name(&self, args: String, cmd: String) -> StateResult<(String, String)> {
         let mut args = args.split_whitespace();
         let first = args
             .next()
             .ok_or(StateErr::MissingArg { 
-                arg: "type".to_string(), 
-                cmd: "resume".to_string() 
+                arg: "type and name".to_string(), 
+                cmd: cmd.clone() 
             })?;
         let second = args
             .next()
             .ok_or(StateErr::MissingArg { 
-                arg: "name".to_string(), 
-                cmd: "resume".to_string() 
+                arg: "type or name".to_string(), 
+                cmd: cmd
             })?;
 
         Ok((first.to_string(), second.to_string()))
