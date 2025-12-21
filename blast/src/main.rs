@@ -15,7 +15,7 @@ fn main() -> DecodeResult<()> {
     let mut sample_rates = HashMap::<u32, u32>::new();
     let mut channel_nums = Vec::<u32>::new();
 
-    for entry in fs::read_dir("assets/")? {
+    for entry in fs::read_dir("blast/assets/")? {
         let dir = match entry {
             Ok(pathbuf) => pathbuf,
             Err(error) => {
