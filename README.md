@@ -19,35 +19,21 @@ One of the goals of this project is to realize as many features as possible with
 - pre-parses all audio files in the assets/ folder
 - configures ALSA according to a consensus based on the audio files' properties (namely sample rate and number of channels)
 - interacts directly with hardware and the DMA buffer for low-latency writes
-- stores commands parsed by the REPL thread into a lock-free command queue for the audio thread
+- processes Commands separately from audio thread for string parsing, hashmap operations, and robust error-handling
 - uses terminal in raw mode for custom terminal rendering
 - implements fast RNG with xoroshiro128+ generation, Lemire's fast modulo, and architecture-specific seeding
 
 **src/file_parsing**:
 - mpeg
-  - parses frames by:
-    <ol type="1">
-      <li>scanning for any two bytes that look like frame sync</li>
-      <li>storing possible headers and vectors of indices in a hashmap</li>
-      <li>sorting possible headers from most to least frequent</li>
-      <li>extracting most common valid header as a reference header</li>
-      <li>comparing all other valid headers to the reference</li>
-      <li>extracting data from file according to the frame lengths of the valid headers</li>
-    </ol>
+  - parses MPEG frames
   - TODO: implement actual decoding of compressed data  
 - wav
   - parses RIFF, fmt, and data chunks sequentially
-  - returns sample_rate, num_channels, bits_per_sample, and samples (little-endian) in an AudioFile struct
 - aiff
   - parses FORM, COMM, and SSND chunks sequentially
-  - returns sample_rate, num_channels, bits_per_sample, and samples (big-endian) in an AudioFile struct
 - decode_helpers  
   - implements custom DecodeErrors and DecodeResult for in-memory file parsing  
-  - provides AudioFile struct to return necessary data for audio APIs, including:  
-    - sample rate  
-    - number of channels  
-    - bits per sample  
-    - extracted samples
+  - provides AudioFile struct to return necessary data for audio APIs
 
 ## Documents consulted
 
