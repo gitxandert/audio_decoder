@@ -219,10 +219,10 @@ impl Conductor {
     // Processes
     //
     fn seq(&mut self, args: SeqArgs) {
-        let tempo = self.tempo_from_repr(args.tempo);
+        let tempo = self.tempo_from_repr(TempoRepr::clone(&args.tempo));
         let state = SeqState {
             active: true,
-            tempo,
+            tempo: Rc::clone(&tempo),
             period: args.period,
             steps: args.steps,
             chance: args.chance,
@@ -235,6 +235,9 @@ impl Conductor {
             Idx::Voice(v) => {
                 let voice: &mut Voice = self.voices.get_mut(v).unwrap();
                 voice.processes.push(Process::Seq(Seq { state }));
+                if args.tempo.mode == TempoMode::Process {
+                    voice.proc_tempi.push(tempo);
+                }
             }
             Idx::Group(g) => {
                 let group: &mut Group = self.groups.get_mut(g).unwrap();
@@ -321,9 +324,8 @@ impl Voice {
         }
 
         let mut ts = state.tempo.borrow_mut();
-        if ts.mode == TempoMode::Voice {
-            ts.active = true;
-            ts.reset();
+        if ts.mode == TempoMode::Voice || ts.mode == TempoMode::TBD {
+            ts.start();
         } else {
             if ts.active == false {
                 println!("\nWarn: Tempo not active for Voice");
@@ -332,8 +334,7 @@ impl Voice {
                 
         for tempo_state in &mut self.proc_tempi {
             let mut ts = tempo_state.borrow_mut();
-            ts.active = true;
-            ts.reset();
+            ts.start();
         }
 
         state.position = match state.velocity >= 0.0 {
@@ -367,8 +368,7 @@ impl Voice {
 
         let mut ts = state.tempo.borrow_mut();
         if ts.mode == TempoMode::Voice {
-            ts.active = false;
-            ts.reset();
+            ts.stop();
         }
 
         for tempo_state in &self.proc_tempi {
