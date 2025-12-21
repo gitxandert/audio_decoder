@@ -7,17 +7,3 @@ pub fn var_args(var: TokenStream) -> TokenStream {
 
     TokenStream::from(TokenTree::Ident(var_args))
 }
-
-macro_rules! commands {
-    ( $( $var:ident ),* $(,)? ) => {
-        #[derive(Copy, Clone, Debug)]
-        pub enum Command {
-            $(
-                $var(var_args!($var)), // formats as {CmdType}Args
-            )*
-        }
-
-        unsafe impl Send for Command {}
-        unsafe impl Sync for Command {}
-    }
-}
