@@ -850,7 +850,16 @@ impl CmdProcessor {
                     let t_args: Vec<_> = t_arg.split(':').collect();
 
                     if t_args.len() != 2 {
-                        return Err(CmdErr::TempoFormatting{});
+                        if t_args[0] != "v" {
+                            return Err(CmdErr::TempoFormatting{});
+                        } else {
+                            // refer to Voice's TempoState
+                            tempo = {
+                                let voice = self.find_voice(name.clone())?;
+                                TempoRepr::clone_owner(&voice.tempo)
+                            };
+                            continue;
+                        }
                     }
 
                     let u = t_args.get(0).unwrap();
@@ -870,15 +879,6 @@ impl CmdProcessor {
                         let g_name = g_name.to_string();
                         let g = self.find_group(g_name)?;
                         tempo = TempoRepr::clone_owner(&g.tempo);
-                        continue;
-                    }
-
-                    if *u == "v" {
-                        // refer to Voice's TempoState
-                        tempo = {
-                            let voice = self.find_voice(name.clone())?;
-                            TempoRepr::clone_owner(&voice.tempo)
-                        };
                         continue;
                     }
 
