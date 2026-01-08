@@ -55,9 +55,10 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
         thread::spawn(move || {
             loop {
-                let mut m = marker_for_mt.lock().unwrap();
-                *m = (*m + 1) % repl_chars.len();
-                drop(m);
+                {
+                    let mut m = marker_for_mt.lock().unwrap();
+                    *m = (*m + 1) % repl_chars.len();
+                }
                 thread::sleep(Duration::from_millis(100));
             }
         });
@@ -69,7 +70,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                     let m = *marker.lock().unwrap();
                     let buf = buffer.lock().unwrap();
                     let curr_len = buf.len();
-                    print!("\r{} {}", repl_chars[m], *buf);
+                    print!("\r{} {} ", repl_chars[m], *buf);
 
                     if last_len > curr_len {
                         let diff = last_len - curr_len;
@@ -108,7 +109,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
   */
                     let cur = *cursor.lock().unwrap();
                     let diff = curr_len - cur;
-                    print!(" \x1b[{}D", diff);
+                    print!("\x1b[{}D", diff);
 
                     std::io::stdout().flush().unwrap();
                 }
@@ -176,7 +177,11 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
                         if !buf.is_empty() {
                             if *cur > 0 {
-                                buf.remove(*cur - 1);
+                                if *cur < buf.len() {
+                                    buf.remove(*cur);
+                                } else {
+                                    buf.remove(*cur - 1);
+                                }
                                 *cur -= 1;
                             }
                         }
@@ -208,9 +213,11 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                                     if cmd_idx > 0 {
                                         cmd_idx -= 1;
                                         let mut buf = buffer.lock().unwrap();
+                                        let mut cur = cursor.lock().unwrap();
                                         buf.clear();
                                         if let Some(prev) = cmd_history.get(cmd_idx) {
                                             *buf = prev.clone();
+                                            *cur = buf.len();
                                         }
                                     }
                                 }
@@ -218,10 +225,12 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                                     if cmd_idx < cmd_history.len() {
                                         cmd_idx += 1;
                                         let mut buf = buffer.lock().unwrap();
+                                        let mut cur = cursor.lock().unwrap();
                                         buf.clear();
                                         if cmd_idx < cmd_history.len() {
                                             if let Some(prev) = cmd_history.get(cmd_idx) {
                                                 *buf = prev.clone();
+                                                *cur = buf.len();
                                             }
                                         }
                                     }
