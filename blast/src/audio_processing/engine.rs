@@ -285,9 +285,31 @@ pub struct VoiceState {
     pub tempo: Rc<RefCell<TempoState>>,
 }
 
+// instead of samples, Voices have a Function,
+// which are either some type of Wave or a collection of samples
+enum Function {
+    Track { samples: Vec<i16> },
+    Wave { form: WaveForm }
+}
+
+enum WaveForm {
+    Custom,
+    Sine,
+    Triangle,
+    Square,
+}
+
+// rewrite later to:
+// pub struct Voice {
+//      function: Function,
+//      channels: usize,
+//      processes: Vec<Process>,
+//      proc_tempi: Vec<Rc<RefCell<TempoState>>>,
+// }
+// the current implemntation of VoiceState will become TrackState;
+// Waves get their own WaveState
 pub struct Voice {
     samples: Vec<i16>,
-    sample_rate: u32,
     channels: usize,
     pub state: VoiceState,  
     processes: Vec<Process>,
@@ -307,7 +329,6 @@ impl Voice {
 
         Self {
             samples: af.samples.clone(),
-            sample_rate: af.sample_rate, 
             channels: af.num_channels as usize, 
             state: voice_state,
             processes: Vec::<Process>::new(),
